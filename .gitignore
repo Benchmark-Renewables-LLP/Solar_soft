@@ -1,0 +1,22 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.env
+.venv/
+env/
+venv/
+
+# VSCode
+.vscode/
+
+# PyCharm
+.idea/
+
+# Data files (optional, if you don’t want to commit)
+data/
+
+# Logs
+*.log
