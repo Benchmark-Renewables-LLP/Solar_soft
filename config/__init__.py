@@ -1,1 +1,0 @@
-TIMESCALEDB_URL = "dbname=solar user=admin password=123456 host=localhost port=5432"

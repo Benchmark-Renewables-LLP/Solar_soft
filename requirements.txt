@@ -1,6 +1,6 @@
-Flask
-psycopg2-binary
-APScheduler
-redis
-pandas
-scikit-learn
+Flask==2.3.2
+psycopg2-binary==2.9.6
+requests==2.31.0
+python-dotenv==1.0.0
+bcrypt==4.0.1
+PyJWT==2.8.0
