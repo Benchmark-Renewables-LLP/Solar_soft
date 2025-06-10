@@ -170,7 +170,7 @@ SELECT create_hypertable('device_data_historical', 'timestamp');
 -- Add the primary key after creating the hypertable
 ALTER TABLE device_data_historical ADD PRIMARY KEY (device_sn, timestamp);
 
--- Create the predictions table (for predictive analytics) without primary key
+-- Create the predictions table (for predictive analytics) without primary key initially
 CREATE TABLE predictions (
     prediction_id SERIAL NOT NULL,
     device_sn TEXT NOT NULL,
@@ -187,7 +187,10 @@ CREATE TABLE predictions (
 -- Convert predictions to a TimescaleDB hypertable
 SELECT create_hypertable('predictions', 'timestamp');
 
--- Create the fault_logs table (for diagnostics) without primary key
+-- Add the primary key after creating the hypertable
+ALTER TABLE predictions ADD PRIMARY KEY (prediction_id);
+
+-- Create the fault_logs table (for diagnostics) without primary key initially
 CREATE TABLE fault_logs (
     fault_id SERIAL NOT NULL,
     device_sn TEXT NOT NULL,
@@ -202,6 +205,9 @@ CREATE TABLE fault_logs (
 
 -- Convert fault_logs to a TimescaleDB hypertable
 SELECT create_hypertable('fault_logs', 'timestamp');
+
+-- Add the primary key after creating the hypertable
+ALTER TABLE fault_logs ADD PRIMARY KEY (fault_id);
 
 -- Create a procedure to move data from device_data_current to device_data_historical
 CREATE OR REPLACE PROCEDURE move_old_data_to_historical(job_id int, config jsonb)
