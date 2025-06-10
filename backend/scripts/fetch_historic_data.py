@@ -1,393 +1,184 @@
 import sys
 import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
-
-import requests
+import csv
 import logging
-import hashlib
-import time
-from config.settings import DATABASE_URL, COMPANY_KEY
+import re
+from datetime import datetime
+import psycopg2
 
-# Configure logging
+# Project imports
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+from shinemonitor_api import fetch_plant_list, fetch_plant_devices, fetch_historical_data
+from config.settings import DATABASE_URL
+
+# Logging configuration
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# API base URL
-BASE_URL = "http://api.shinemonitor.com/public/"
+# Regex for numeric validation
+NUMBER_REGEX = re.compile(r'^(\d*\.\d+|\d+)$')
 
-def calculate_sign(salt, secret_or_pwd, additional_params, is_auth=False):
-    """
-    Calculate the sign parameter using SHA-1 as per Shinemonitor API.
-    """
-    if is_auth:
-        # For authentication: sign = SHA-1(salt + SHA-1(pwd) + additional_params)
-        pwd_hash = hashlib.sha1(secret_or_pwd.encode('utf-8')).hexdigest()
-        data = f"{salt}{pwd_hash}{additional_params}"
-    else:
-        # For other requests: sign = SHA-1(salt + secret + token + additional_params)
-        data = f"{salt}{secret_or_pwd}{additional_params}"
-    return hashlib.sha1(data.encode('utf-8')).hexdigest()
+def validate_parameter(value, param_name, min_val, max_val):
+    if value is None:
+        return True
+    str_value = str(value)
+    if not NUMBER_REGEX.match(str_value):
+        logging.warning(f"Invalid format for {param_name}: {str_value}")
+        return False
+    num_value = float(str_value)
+    if not (min_val <= num_value <= max_val):
+        
+        logging.warning(f"Value out of range for {param_name}: {num_value} (expected {min_val} to {max_val})")
+        return False
+    return True
 
-def authenticate(username, password):
-    """
-    Authenticate with Shinemonitor API to obtain secret and token.
-    """
+def get_db_connection():
     try:
-        salt = str(int(time.time() * 1000))
-        action_params = f"&action=auth&usr={username}&company-key={COMPANY_KEY}"
-        sign = calculate_sign(salt, password, action_params, is_auth=True)
-        url = f"{BASE_URL}?sign={sign}&salt={salt}{action_params}"
-        
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        
-        if data.get("err") != 0:
-            logging.error(f"Authentication failed: {data.get('desc')}")
-            return None, None
-        
-        secret = data["dat"]["secret"]
-        token = data["dat"]["token"]
-        logging.info("Authentication successful")
-        return secret, token
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error during authentication: {e}")
-        return None, None
+        conn = psycopg2.connect(DATABASE_URL)
+        logging.info("Connected to TimescaleDB")
+        return conn
+    except Exception as e:
+        logging.error(f"Failed to connect to TimescaleDB: {e}")
+        raise
 
-def fetch_plant_list(user_id, username, password):
-    """
-    Fetch the list of plants for a user from Shinemonitor API.
-    """
+def fetch_historic_data():
+    print("Starting fetch_historic_data script...")
+    conn = get_db_connection()
+
     try:
-        secret, token = authenticate(username, password)
-        if not secret or not token:
-            return []
+        with open('backend/data/userx.csv', newline='', encoding='utf-8-sig') as csvfile:
+            reader = csv.DictReader(csvfile)
+            users = list(reader)
+            if users:
+                print(f"Keys in first user dictionary: {users[0].keys()}")
 
-        salt = str(int(time.time() * 1000))
-        action_params = f"&action=queryPlants&pagesize=50"
-        sign = calculate_sign(salt, secret, f"{token}{action_params}")
-        url = f"{BASE_URL}?sign={sign}&salt={salt}&token={token}{action_params}"
-        
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        
-        if data.get("err") != 0:
-            logging.error(f"Error fetching plant list for user {user_id}: {data.get('desc')}")
-            return []
-        
-        plants = data["dat"]["plant"]
-        return [
-            {
-                "plant_id": p["pid"],
-                "customer_name": p.get("name"),  # Using plant name as customer name
-                "capacity": float(p.get("nominalPower", 0)),
-                "total_energy": float(p.get("energyYearEstimate", 0)),
-                "install_date": p.get("install")  # To be used for devices
-            }
-            for p in plants
-        ]
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error fetching plant list for user {user_id}: {e}")
-        return []
+        for user in users:
+            user_id = user['user_id']
+            username = user['username']
+            password = user['password']
+            logging.info(f"Processing user {user_id}: {username}")
+            print(f"Processing user {user_id}: {username}")
 
-def fetch_plant_devices(user_id, username, password, plant_id):
-    """
-    Fetch devices for a specific plant from Shinemonitor API.
-    """
-    try:
-        secret, token = authenticate(username, password)
-        if not secret or not token:
-            return []
-
-        salt = str(int(time.time() * 1000))
-        action_params = f"&action=queryDevices&plantid={plant_id}&pagesize=50"
-        sign = calculate_sign(salt, secret, f"{token}{action_params}")
-        url = f"{BASE_URL}?sign={sign}&salt={salt}&token={token}{action_params}"
-        
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        
-        if data.get("err") != 0:
-            logging.error(f"Error fetching devices for plant {plant_id}, user {user_id}: {data.get('desc')}")
-            return []
-        
-        devices = data["dat"]["device"]
-        # Fetch plant info to get install_date
-        plant_info = fetch_plant_info(user_id, username, password, plant_id)
-        install_date = plant_info.get("install_date") if plant_info else None
-        
-        return [
-            {
-                "sn": d["sn"],
-                "first_install_date": install_date,  # Using plant's install date
-                "inverter_model": "Unknown",  # Not provided by API, placeholder
-                "panel_model": "Unknown",  # Not provided by API, placeholder
-                "pn": d["pn"],
-                "devcode": d["devcode"],
-                "devaddr": d["devaddr"],
-                "pv_count": 3,  # Hardcoding as API doesn't provide; adjust based on actual data
-                "string_count": 0  # Not provided, default to 0
-            }
-            for d in devices
-        ]
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error fetching devices for plant {plant_id}, user {user_id}: {e}")
-        return []
-
-def fetch_plant_info(user_id, username, password, plant_id):
-    """
-    Fetch plant information to get install_date.
-    """
-    try:
-        secret, token = authenticate(username, password)
-        if not secret or not token:
-            return None
-
-        salt = str(int(time.time() * 1000))
-        action_params = f"&action=queryPlantInfo&plantid={plant_id}"
-        sign = calculate_sign(salt, secret, f"{token}{action_params}")
-        url = f"{BASE_URL}?sign={sign}&salt={salt}&token={token}{action_params}"
-        
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        
-        if data.get("err") != 0:
-            logging.error(f"Error fetching plant info for plant {plant_id}: {data.get('desc')}")
-            return None
-        
-        return {"install_date": data["dat"]["install"]}
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error fetching plant info for plant {plant_id}: {e}")
-        return None
-
-def fetch_historical_data(user_id, username, password, device, start_date, end_date):
-    """
-    Fetch historical 5-minute interval data for a device from Shinemonitor API.
-    """
-    try:
-        secret, token = authenticate(username, password)
-        if not secret or not token:
-            return []
-
-        from datetime import datetime, timedelta
-        start = datetime.strptime(start_date, "%Y-%m-%d")
-        end = datetime.strptime(end_date, "%Y-%m-%d")
-        current_date = start
-        all_data = []
-        consecutive_no_record = 0
-        MAX_CONSECUTIVE_NO_RECORD = 30  # Stop after 30 days of no data
-
-        while current_date <= end:
-            date_str = current_date.strftime("%Y-%m-%d")
-            salt = str(int(time.time() * 1000))
-            action_params = f"&action=queryDeviceDataOneDay&i18n=en_US&pn={device['pn']}&devcode={device['devcode']}&devaddr={device['devaddr']}&sn={device['sn']}&date={date_str}"
-            sign = calculate_sign(salt, secret, f"{token}{action_params}")
-            url = f"{BASE_URL}?sign={sign}&salt={salt}&token={token}{action_params}"
-            
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            
-            if data.get("err") != 0:
-                desc = data.get("desc", "Unknown error")
-                if desc == "ERR_NO_RECORD":
-                    consecutive_no_record += 1
-                    logging.warning(f"No historical data for device {device['sn']} on {date_str}: {desc}")
-                    if consecutive_no_record >= MAX_CONSECUTIVE_NO_RECORD:
-                        logging.warning(f"Stopping historical data fetch for device {device['sn']} after {MAX_CONSECUTIVE_NO_RECORD} days of no data")
-                        break
-                else:
-                    logging.error(f"Error fetching historical data for device {device['sn']} on {date_str}: {desc}")
-                current_date += timedelta(days=1)
-                continue
-            
-            consecutive_no_record = 0  # Reset counter if we get data
-            daily_data = data["dat"]["row"]
-            logging.info(f"Received {len(daily_data)} data rows for device {device['sn']} on {date_str}")
-            print(f"Received {len(daily_data)} data rows for device {device['sn']} on {date_str}")
-            if not daily_data:
-                current_date += timedelta(days=1)
+            plants = fetch_plant_list(user_id, username, password)
+            if not plants:
+                logging.warning(f"No plants found for user {user_id}")
                 continue
 
-            # Process 5-minute interval data directly
-            for row in daily_data:
-                fields = row["field"]
-                entry = {"device_id": device["sn"], "timestamp": fields[1]}  # timestamp is field[1]
-                for idx, title in enumerate(data["dat"]["title"]):
-                    value = fields[idx]
-                    if not value or value == "":
+            with conn.cursor() as cur:
+                for plant in plants:
+                    print(f"Processing plant ID {plant['plant_id']}")
+                    cur.execute("""
+                        INSERT INTO plants (plant_id, customer_name, capacity, total_energy, install_date)
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (plant_id) DO NOTHING
+                    """, (
+                        plant['plant_id'], plant['customer_name'], plant['capacity'],
+                        plant['total_energy'], plant['install_date']
+                    ))
+                    logging.info(f"Inserted plant with ID {plant['plant_id']}")
+
+                for plant in plants:
+                    plant_id = plant['plant_id']
+                    devices = fetch_plant_devices(user_id, username, password, plant_id)
+                    if not devices:
+                        logging.warning(f"No devices found for plant {plant_id}")
                         continue
-                    if "PV1 input voltage" in title["title"]:
-                        entry["pv01_voltage"] = float(value)
-                    elif "PV2 input voltage" in title["title"]:
-                        entry["pv02_voltage"] = float(value)
-                    elif "PV3 input voltage" in title["title"]:
-                        entry["pv03_voltage"] = float(value)
-                    elif "PV1 Input current" in title["title"]:
-                        entry["pv01_current"] = float(value)
-                    elif "PV2 Input current" in title["title"]:
-                        entry["pv02_current"] = float(value)
-                    elif "PV3 Input current" in title["title"]:
-                        entry["pv03_current"] = float(value)
-                    elif "R phase grid voltage" in title["title"]:
-                        entry["r_voltage"] = float(value)
-                    elif "S phase grid voltage" in title["title"]:
-                        entry["s_voltage"] = float(value)
-                    elif "T phase grid voltage" in title["title"]:
-                        entry["t_voltage"] = float(value)
-                    elif "Grid frequency" in title["title"]:
-                        entry["frequency"] = float(value)
-                    elif "Grid connected power" in title["title"]:
-                        entry["total_power"] = float(value)
-                    elif "Inverter operation mode" in title["title"]:
-                        entry["state"] = value
+                    print(f"Found {len(devices)} devices for plant {plant_id}: {[device['sn'] for device in devices]}")
 
-                # Set remaining fields to None as not provided by API
-                entry.update({
-                    "pv03_voltage": entry.get("pv03_voltage"),
-                    "pv03_current": entry.get("pv03_current"),
-                    "pv04_voltage": None,
-                    "pv04_current": None,
-                    "pv05_voltage": None,
-                    "pv05_current": None,
-                    "pv06_voltage": None,
-                    "pv06_current": None,
-                    "pv07_voltage": None,
-                    "pv07_current": None,
-                    "pv08_voltage": None,
-                    "pv08_current": None,
-                    "pv09_voltage": None,
-                    "pv09_current": None,
-                    "pv10_voltage": None,
-                    "pv10_current": None,
-                    "pv11_voltage": None,
-                    "pv11_current": None,
-                    "pv12_voltage": None,
-                    "pv12_current": None,
-                    "r_current": None,
-                    "s_current": None,
-                    "t_current": None,
-                    "rs_voltage": None,
-                    "st_voltage": None,
-                    "tr_voltage": None,
-                    "reactive_power": None,
-                    "energy_today": float(data["dat"].get("energy_today", 0)),
-                    "cuf": None,
-                    "pr": None
-                })
-                all_data.append(entry)
-            
-            current_date += timedelta(days=1)
-        
-        return all_data
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error fetching historical data for device {device['sn']}: {e}")
-        return []
+                    for device in devices:
+                        print(f"Processing device SN {device['sn']} for plant {plant_id}")
+                        cur.execute("""
+                            INSERT INTO devices (sn, plant_id, first_install_date, inverter_model, panel_model, pv_count, string_count)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (sn) DO NOTHING
+                        """, (
+                            device['sn'], plant_id, device['first_install_date'], device['inverter_model'],
+                            device['panel_model'], device['pv_count'], device['string_count']
+                        ))
+                        logging.info(f"Inserted device with SN {device['sn']}")
 
-def fetch_current_data(user_id, username, password, device, since=None):
-    """
-    Fetch current day time-series data for a device from Shinemonitor API.
-    """
-    try:
-        secret, token = authenticate(username, password)
-        if not secret or not token:
-            return []
+                    for device in devices:
+                        start_date = "2025-06-08"
+                        end_date = "2025-06-09"
+                        logging.info(f"Fetching historical data for device {device['sn']}")
+                        print(f"Fetching historical data for device {device['sn']} on {start_date}")
 
-        from datetime import datetime
-        date_str = datetime.utcnow().strftime("%Y-%m-%d")
-        salt = str(int(time.time() * 1000))
-        action_params = f"&action=queryDeviceDataOneDay&i18n=en_US&pn={device['pn']}&devcode={device['devcode']}&devaddr={device['devaddr']}&sn={device['sn']}&date={date_str}"
-        sign = calculate_sign(salt, secret, f"{token}{action_params}")
-        url = f"{BASE_URL}?sign={sign}&salt={salt}&token={token}{action_params}"
-        
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        
-        if data.get("err") != 0:
-            logging.error(f"Error fetching current data for device {device['sn']}: {data.get('desc')}")
-            return []
-        
-        rows = data["dat"]["row"]
-        if not rows:
-            return []
+                        historical_data = fetch_historical_data(user_id, username, password, device, start_date, end_date)
+                        if not historical_data:
+                            logging.warning(f"No historical data for device {device['sn']}")
+                            continue
+                        print(f"Received {len(historical_data)} historical data entries for device {device['sn']}")
 
-        # Filter data since the last fetch if 'since' is provided
-        if since:
-            since_dt = datetime.strptime(since, "%Y-%m-%dT%H:%M:%SZ")
-            rows = [row for row in rows if datetime.strptime(row["field"][1], "%Y-%m-%d %H:%M:%S") > since_dt]
+                        for entry in historical_data:
+                            # Ensure timestamp is present
+                            ts_str = entry.get('timestamp')
+                            if not ts_str:
+                                logging.warning(f"Missing timestamp for device {device['sn']}: {entry}")
+                                continue
+                            try:
+                                # Parse timestamp to ensure it's in the correct format
+                                ts = datetime.strptime(ts_str, '%Y-%m-%d %H:%M:%S')
+                                entry_timestamp = ts.strftime('%Y-%m-%d %H:%M:%S')
+                            except ValueError:
+                                logging.warning(f"Invalid timestamp format for device {device['sn']}: {ts_str}")
+                                continue
 
-        current_data = []
-        for row in rows:
-            fields = row["field"]
-            entry = {"device_id": device["sn"], "timestamp": fields[1]}  # timestamp is field[1]
-            for idx, title in enumerate(data["dat"]["title"]):
-                value = fields[idx]
-                if not value or value == "":
-                    continue
-                if "PV1 input voltage" in title["title"]:
-                    entry["pv01_voltage"] = float(value)
-                elif "PV2 input voltage" in title["title"]:
-                    entry["pv02_voltage"] = float(value)
-                elif "PV3 input voltage" in title["title"]:
-                    entry["pv03_voltage"] = float(value)
-                elif "PV1 Input current" in title["title"]:
-                    entry["pv01_current"] = float(value)
-                elif "PV2 Input current" in title["title"]:
-                    entry["pv02_current"] = float(value)
-                elif "PV3 Input current" in title["title"]:
-                    entry["pv03_current"] = float(value)
-                elif "R phase grid voltage" in title["title"]:
-                    entry["r_voltage"] = float(value)
-                elif "S phase grid voltage" in title["title"]:
-                    entry["s_voltage"] = float(value)
-                elif "T phase grid voltage" in title["title"]:
-                    entry["t_voltage"] = float(value)
-                elif "Grid frequency" in title["title"]:
-                    entry["frequency"] = float(value)
-                elif "Grid connected power" in title["title"]:
-                    entry["total_power"] = float(value)
-                elif "Inverter operation mode" in title["title"]:
-                    entry["state"] = value
+                            print(f"Processing historical data entry for device {device['sn']} at {entry_timestamp}")
 
-            # Set remaining fields to None as not provided by API
-            entry.update({
-                "pv03_voltage": entry.get("pv03_voltage"),
-                "pv03_current": entry.get("pv03_current"),
-                "pv04_voltage": None,
-                "pv04_current": None,
-                "pv05_voltage": None,
-                "pv05_current": None,
-                "pv06_voltage": None,
-                "pv06_current": None,
-                "pv07_voltage": None,
-                "pv07_current": None,
-                "pv08_voltage": None,
-                "pv08_current": None,
-                "pv09_voltage": None,
-                "pv09_current": None,
-                "pv10_voltage": None,
-                "pv10_current": None,
-                "pv11_voltage": None,
-                "pv11_current": None,
-                "pv12_voltage": None,
-                "pv12_current": None,
-                "r_current": None,
-                "s_current": None,
-                "t_current": None,
-                "rs_voltage": None,
-                "st_voltage": None,
-                "tr_voltage": None,
-                "reactive_power": None,
-                "energy_today": float(data["dat"].get("energy_today", 0)),
-                "cuf": None,
-                "pr": None
-            })
-            current_data.append(entry)
-        
-        return current_data
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error fetching current data for device {device['sn']}: {e}")
-        return []
+                            # Validate important parameters
+                            valid = True
+                            for i in range(1, 13):
+                                if not validate_parameter(entry.get(f"pv{i:02d}_voltage"), f"pv{i:02d}_voltage", 0, 1000):
+                                    valid = False
+                                if not validate_parameter(entry.get(f"pv{i:02d}_current"), f"pv{i:02d}_current", 0, 50):
+                                    valid = False
+                            for phase in ['r', 's', 't']:
+                                if not validate_parameter(entry.get(f"{phase}_voltage"), f"{phase}_voltage", 0, 300):
+                                    valid = False
+                            if not validate_parameter(entry.get("total_power"), "total_power", 0, 100000):
+                                valid = False
+                            if not validate_parameter(entry.get("energy_today"), "energy_today", 0, 100):
+                                valid = False
+
+                            if not valid:
+                                logging.warning(f"Skipping entry for device {device['sn']} at {entry_timestamp} due to validation failure")
+                                continue
+
+                            print(f"Inserting historical data for device {device['sn']} at {entry_timestamp}")
+                            cur.execute("""
+                                INSERT INTO device_data_current (
+                                    device_id, timestamp, pv01_voltage, pv01_current, pv02_voltage, pv02_current,
+                                    pv03_voltage, pv03_current, pv04_voltage, pv04_current, pv05_voltage, pv05_current,
+                                    pv06_voltage, pv06_current, pv07_voltage, pv07_current, pv08_voltage, pv08_current,
+                                    pv09_voltage, pv09_current, pv10_voltage, pv10_current, pv11_voltage, pv11_current,
+                                    pv12_voltage, pv12_current, r_voltage, s_voltage, t_voltage,
+                                    r_current, s_current, t_current, rs_voltage, st_voltage, tr_voltage,
+                                    frequency, total_power, reactive_power, energy_today, cuf, pr, state
+                                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                ON CONFLICT (device_id, timestamp) DO NOTHING
+                            """, (
+                                entry['device_id'], entry_timestamp, entry.get('pv01_voltage'), entry.get('pv01_current'),
+                                entry.get('pv02_voltage'), entry.get('pv02_current'), entry.get('pv03_voltage'), entry.get('pv03_current'),
+                                entry.get('pv04_voltage'), entry.get('pv04_current'), entry.get('pv05_voltage'), entry.get('pv05_current'),
+                                entry.get('pv06_voltage'), entry.get('pv06_current'), entry.get('pv07_voltage'), entry.get('pv07_current'),
+                                entry.get('pv08_voltage'), entry.get('pv08_current'), entry.get('pv09_voltage'), entry.get('pv09_current'),
+                                entry.get('pv10_voltage'), entry.get('pv10_current'), entry.get('pv11_voltage'), entry.get('pv11_current'),
+                                entry.get('pv12_voltage'), entry.get('pv12_current'), entry.get('r_voltage'), entry.get('s_voltage'), entry.get('t_voltage'),
+                                entry.get('r_current'), entry.get('s_current'), entry.get('t_current'), entry.get('rs_voltage'),
+                                entry.get('st_voltage'), entry.get('tr_voltage'), entry.get('frequency'), entry.get('total_power'),
+                                entry.get('reactive_power'), entry.get('energy_today'), entry.get('cuf'), entry.get('pr'), entry.get('state')
+                            ))
+                            logging.info(f"Inserted historical data for device {device['sn']} at {entry_timestamp}")
+                            print(f"Successfully inserted historical data for device {device['sn']} at {entry_timestamp}")
+
+        conn.commit()
+        logging.info("Completed fetch_historic_data script.")
+        print("Done.")
+    except Exception as e:
+        logging.error(f"Error in fetch_historic_data: {e}")
+        print(f"Error in fetch_historic_data: {e}")
+        raise
+    finally:
+        conn.close()
+
+if __name__ == "__main__":
+    fetch_historic_data()
