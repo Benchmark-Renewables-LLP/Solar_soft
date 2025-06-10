@@ -3,7 +3,7 @@ import os
 import csv
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 import psycopg2
 
 # Project imports
@@ -26,7 +26,6 @@ def validate_parameter(value, param_name, min_val, max_val):
         return False
     num_value = float(str_value)
     if not (min_val <= num_value <= max_val):
-        
         logging.warning(f"Value out of range for {param_name}: {num_value} (expected {min_val} to {max_val})")
         return False
     return True
@@ -40,16 +39,50 @@ def get_db_connection():
         logging.error(f"Failed to connect to TimescaleDB: {e}")
         raise
 
+def load_users_to_db(conn, csv_file_path):
+    with open(csv_file_path, newline='', encoding='utf-8-sig') as csvfile:
+        reader = csv.DictReader(csvfile)
+        users = list(reader)
+        if not users:
+            logging.error("No users found in CSV file")
+            return users
+
+        with conn.cursor() as cur:
+            for user in users:
+                # Insert into customers
+                cur.execute("""
+                    INSERT INTO customers (customer_id, customer_name)
+                    VALUES (%s, %s)
+                    ON CONFLICT (customer_id) DO NOTHING
+                """, (
+                    user['user_id'], user.get('customer_name', 'Unknown')
+                ))
+
+                # Insert into api_credentials
+                cur.execute("""
+                    INSERT INTO api_credentials (customer_id, api_provider, username, password)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT DO NOTHING
+                """, (
+                    user['user_id'], 'shinemonitor', user['username'], user['password']
+                ))
+
+            conn.commit()
+        logging.info(f"Processed {len(users)} users into customers and api_credentials tables")
+        return users
+
 def fetch_historic_data():
     print("Starting fetch_historic_data script...")
     conn = get_db_connection()
 
     try:
-        with open('backend/data/userx.csv', newline='', encoding='utf-8-sig') as csvfile:
-            reader = csv.DictReader(csvfile)
-            users = list(reader)
-            if users:
-                print(f"Keys in first user dictionary: {users[0].keys()}")
+        # Load users from CSV and populate customers and api_credentials
+        users = load_users_to_db(conn, 'backend/data/userx.csv')
+        if not users:
+            logging.error("No users found, exiting.")
+            return
+
+        print(f"Keys in first user dictionary: {users[0].keys()}")
 
         for user in users:
             user_id = user['user_id']
@@ -67,11 +100,11 @@ def fetch_historic_data():
                 for plant in plants:
                     print(f"Processing plant ID {plant['plant_id']}")
                     cur.execute("""
-                        INSERT INTO plants (plant_id, customer_name, capacity, total_energy, install_date)
-                        VALUES (%s, %s, %s, %s, %s)
+                        INSERT INTO plants (plant_id, customer_id, plant_name, capacity, total_energy, install_date)
+                        VALUES (%s, %s, %s, %s, %s, %s)
                         ON CONFLICT (plant_id) DO NOTHING
                     """, (
-                        plant['plant_id'], plant['customer_name'], plant['capacity'],
+                        plant['plant_id'], user_id, plant['plant_name'], plant['capacity'],
                         plant['total_energy'], plant['install_date']
                     ))
                     logging.info(f"Inserted plant with ID {plant['plant_id']}")
@@ -87,9 +120,9 @@ def fetch_historic_data():
                     for device in devices:
                         print(f"Processing device SN {device['sn']} for plant {plant_id}")
                         cur.execute("""
-                            INSERT INTO devices (sn, plant_id, first_install_date, inverter_model, panel_model, pv_count, string_count)
+                            INSERT INTO devices (device_sn, plant_id, first_install_date, inverter_model, panel_model, pv_count, string_count)
                             VALUES (%s, %s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (sn) DO NOTHING
+                            ON CONFLICT (device_sn) DO NOTHING
                         """, (
                             device['sn'], plant_id, device['first_install_date'], device['inverter_model'],
                             device['panel_model'], device['pv_count'], device['string_count']
@@ -114,8 +147,9 @@ def fetch_historic_data():
                             if not ts_str:
                                 logging.warning(f"Missing timestamp for device {device['sn']}: {entry}")
                                 continue
+                            # Clean the timestamp string by removing leading/trailing whitespace or newlines
+                            ts_str = ts_str.strip()
                             try:
-                                # Parse timestamp to ensure it's in the correct format
                                 ts = datetime.strptime(ts_str, '%Y-%m-%d %H:%M:%S')
                                 entry_timestamp = ts.strftime('%Y-%m-%d %H:%M:%S')
                             except ValueError:
@@ -138,15 +172,21 @@ def fetch_historic_data():
                                 valid = False
                             if not validate_parameter(entry.get("energy_today"), "energy_today", 0, 100):
                                 valid = False
+                            if not validate_parameter(entry.get("pr"), "pr", 0, 100):
+                                valid = False
 
                             if not valid:
                                 logging.warning(f"Skipping entry for device {device['sn']} at {entry_timestamp} due to validation failure")
                                 continue
 
-                            print(f"Inserting historical data for device {device['sn']} at {entry_timestamp}")
-                            cur.execute("""
-                                INSERT INTO device_data_current (
-                                    device_id, timestamp, pv01_voltage, pv01_current, pv02_voltage, pv02_current,
+                            # Determine which table to insert into based on timestamp
+                            current_threshold = datetime.now() - timedelta(days=7)  # 7 days threshold
+                            target_table = 'device_data_current' if ts >= current_threshold else 'device_data_historical'
+
+                            print(f"Inserting historical data for device {device['sn']} at {entry_timestamp} into {target_table}")
+                            cur.execute(f"""
+                                INSERT INTO {target_table} (
+                                    device_sn, timestamp, pv01_voltage, pv01_current, pv02_voltage, pv02_current,
                                     pv03_voltage, pv03_current, pv04_voltage, pv04_current, pv05_voltage, pv05_current,
                                     pv06_voltage, pv06_current, pv07_voltage, pv07_current, pv08_voltage, pv08_current,
                                     pv09_voltage, pv09_current, pv10_voltage, pv10_current, pv11_voltage, pv11_current,
@@ -154,9 +194,9 @@ def fetch_historic_data():
                                     r_current, s_current, t_current, rs_voltage, st_voltage, tr_voltage,
                                     frequency, total_power, reactive_power, energy_today, cuf, pr, state
                                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                                ON CONFLICT (device_id, timestamp) DO NOTHING
+                                ON CONFLICT (device_sn, timestamp) DO NOTHING
                             """, (
-                                entry['device_id'], entry_timestamp, entry.get('pv01_voltage'), entry.get('pv01_current'),
+                                device['sn'], entry_timestamp, entry.get('pv01_voltage'), entry.get('pv01_current'),
                                 entry.get('pv02_voltage'), entry.get('pv02_current'), entry.get('pv03_voltage'), entry.get('pv03_current'),
                                 entry.get('pv04_voltage'), entry.get('pv04_current'), entry.get('pv05_voltage'), entry.get('pv05_current'),
                                 entry.get('pv06_voltage'), entry.get('pv06_current'), entry.get('pv07_voltage'), entry.get('pv07_current'),
@@ -167,8 +207,47 @@ def fetch_historic_data():
                                 entry.get('st_voltage'), entry.get('tr_voltage'), entry.get('frequency'), entry.get('total_power'),
                                 entry.get('reactive_power'), entry.get('energy_today'), entry.get('cuf'), entry.get('pr'), entry.get('state')
                             ))
-                            logging.info(f"Inserted historical data for device {device['sn']} at {entry_timestamp}")
-                            print(f"Successfully inserted historical data for device {device['sn']} at {entry_timestamp}")
+                            logging.info(f"Inserted historical data for device {device['sn']} at {entry_timestamp} into {target_table}")
+                            print(f"Successfully inserted historical data for device {device['sn']} at {entry_timestamp} into {target_table}")
+
+                            # Generate predictions for the next day based on this data
+                            if target_table == 'device_data_current':
+                                total_power = float(entry.get('total_power', 0) or 0)
+                                pr = float(entry.get('pr', 0) or 0)
+                                predicted_energy = total_power * 1.05
+                                predicted_pr = pr * 1.02 if pr > 0 else 80.0  # Default to 80 if pr is 0
+                                confidence_score = 0.95  # Example confidence
+                                model_version = "v1.0"  # Example model version
+                                prediction_timestamp = (ts + timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S')
+
+                                print(f"Inserting prediction for device {device['sn']} at {prediction_timestamp}")
+                                cur.execute("""
+                                    INSERT INTO predictions (
+                                        device_sn, timestamp, predicted_energy, predicted_pr, confidence_score, model_version
+                                    ) VALUES (%s, %s, %s, %s, %s, %s)
+                                """, (
+                                    device['sn'], prediction_timestamp, predicted_energy, predicted_pr,
+                                    confidence_score, model_version
+                                ))
+                                logging.info(f"Inserted prediction for device {device['sn']} at {prediction_timestamp}")
+
+                            # Insert fault logs if any faults were reported by the API
+                            faults = entry.get('faults', [])
+                            for fault in faults:
+                                fault_timestamp = entry_timestamp
+                                fault_code = fault["code"]
+                                fault_description = fault["description"]
+                                severity = fault["severity"]
+
+                                print(f"Inserting fault log for device {device['sn']} at {fault_timestamp}")
+                                cur.execute("""
+                                    INSERT INTO fault_logs (
+                                        device_sn, timestamp, fault_code, fault_description, severity
+                                    ) VALUES (%s, %s, %s, %s, %s)
+                                """, (
+                                    device['sn'], fault_timestamp, fault_code, fault_description, severity
+                                ))
+                                logging.info(f"Inserted fault log for device {device['sn']} at {fault_timestamp}")
 
         conn.commit()
         logging.info("Completed fetch_historic_data script.")
