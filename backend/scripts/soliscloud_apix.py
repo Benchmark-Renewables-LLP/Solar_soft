@@ -5,12 +5,11 @@ import time
 import json
 import logging
 import os
-import re
 import base64
 from datetime import datetime, timedelta
-import pytz
 from logging.handlers import RotatingFileHandler
 from typing import Any
+from time import strftime, gmtime
 
 # Ensure logs directory exists
 log_dir = "logs"
@@ -37,14 +36,37 @@ class SolisCloudAPI:
         self.rate_limit_remaining = None
         self.rate_limit_reset = None
 
+    def _get_gmt_time(self):
+        try:
+            return strftime("%a, %-d %b %Y %H:%M:%S GMT", gmtime())
+        except ValueError:
+            return strftime("%a, %d %b %Y %H:%M:%S GMT", gmtime()).replace(" 0", " ")
+
+    def _get_content_md5(self, payload):
+        payload_str = json.dumps(payload or {}, separators=(',', ':'), ensure_ascii=False)
+        md5_hash = hashlib.md5(payload_str.encode('utf-8')).digest()
+        return base64.b64encode(md5_hash).decode('utf-8'), payload_str
+
     def generate_signature(self, method, path, content_md5, content_type, date):
         canonical_string = f"{method}\n{content_md5}\n{content_type}\n{date}\n{path}"
+        logger.debug("\nSIGNATURE DEBUG >>>")
+        logger.debug("Method: %s", method)
+        logger.debug("Path: %s", path)
+        logger.debug("Content-MD5: %s", content_md5)
+        logger.debug("Content-Type: %s", content_type)
+        logger.debug("Date: %s", date)
+        logger.debug("Canonical String:\n%s", canonical_string)
+
         signature = hmac.new(
             self.api_secret.encode('utf-8'),
             canonical_string.encode('utf-8'),
             hashlib.sha1
         ).digest()
-        return base64.b64encode(signature).decode('utf-8')
+        encoded = base64.b64encode(signature).decode('utf-8')
+        logger.debug("Generated Signature: %s", encoded)
+        logger.debug("Authorization Header: API %s:%s", self.api_key, encoded)
+        logger.debug("<<< END SIGNATURE DEBUG")
+        return encoded
 
     def handle_rate_limit(self, response):
         remaining = response.headers.get('X-Rate-Limit-Remaining')
@@ -67,15 +89,12 @@ class SolisCloudAPI:
 
         for attempt in range(max_retries):
             timestamp = str(int(time.time()))
-            date_header = datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT")
+            date_header = self._get_gmt_time()
             endpoint = endpoint.lstrip("/")
             path = f"/v1/api/{endpoint}"
             content_type = "application/json;charset=UTF-8"
 
-            payload_str = json.dumps(payload or {}, separators=(',', ':'))
-            md5_hash = hashlib.md5(payload_str.encode('utf-8')).digest()
-            content_md5 = base64.b64encode(md5_hash).decode('utf-8')
-
+            content_md5, payload_str = self._get_content_md5(payload)
             signature = self.generate_signature(method, path, content_md5, content_type, date_header)
 
             headers = {
@@ -111,42 +130,54 @@ class SolisCloudAPI:
         logger.error(f"Failed to complete request after {max_retries} attempts.")
         return None
 
-    async def user_station_list(self, key_id: str, secret: bytes, /, *, user_id: str = None, page_no: int = 1, page_size: int = 20, nmi_code: str = None) -> dict[str, Any]:
-        if page_size > 100:
-            raise ValueError("Page size cannot exceed 100")
-        params = {
-            "userId": user_id or key_id,
-            "pageNo": page_no,
-            "pageSize": page_size
-        }
-        if nmi_code:
-            params["nmiCode"] = nmi_code
-        self.api_key = key_id
-        self.api_secret = secret.decode() if isinstance(secret, bytes) else secret
-        return self.make_request("POST", "userStationList", params)
+    def get_all_stations(self):
+        stations = []
+        page = 1
+        while True:
+            payload = {"pageNo": page, "pageSize": 100}
+            response = self.make_request("POST", "userStationList", payload)
+            if not response or not response.get("success"):
+                break
+            station_list = response.get("data", {}).get("stationList", [])
+            stations.extend(station_list)
+            if page >= response.get("data", {}).get("totalPages", 1):
+                break
+            page += 1
+        return stations
 
-    async def inverter_list(self, key_id: str, secret: bytes, /, *, station_id: str, page_no: int = 1, page_size: int = 20) -> dict[str, Any]:
-        if page_size > 100:
-            raise ValueError("Page size cannot exceed 100")
-        params = {"stationId": station_id, "pageNo": page_no, "pageSize": page_size}
-        self.api_key = key_id
-        self.api_secret = secret.decode() if isinstance(secret, bytes) else secret
-        return self.make_request("POST", "inverterList", params)
+    def get_inverters_by_station(self, station_id):
+        inverters = []
+        page = 1
+        while True:
+            payload = {"stationId": station_id, "pageNo": page, "pageSize": 100}
+            response = self.make_request("POST", "inverterList", payload)
+            if not response or not response.get("success"):
+                break
+            inverter_list = response.get("data", {}).get("inverterList", [])
+            inverters.extend(inverter_list)
+            if page >= response.get("data", {}).get("totalPages", 1):
+                break
+            page += 1
+        return inverters
 
-    async def inverter_detail(self, key_id: str, secret: bytes, /, *, inverter_id: str, inverter_sn: str) -> dict[str, Any]:
-        params = {"inverterId": inverter_id, "inverterSn": inverter_sn}
-        self.api_key = key_id
-        self.api_secret = secret.decode() if isinstance(secret, bytes) else secret
-        return self.make_request("POST", "inverterDetail", params)
+if __name__ == "__main__":
+    # Replace these values directly in the script
+ 
+    api_key = "1300386381677682509"  # Replace with your API ID
+    api_secret = "25af1c3d1343429783fb7bb437d342d3"
 
-    async def inverter_day(self, key_id: str, secret: bytes, /, *, inverter_id: str, inverter_sn: str, date: str, time_zone: float = 8.0, money: str = "CNY") -> dict[str, Any]:
-        params = {
-            "inverterId": inverter_id,
-            "inverterSn": inverter_sn,
-            "time": date,
-            "timeZone": time_zone,
-            "money": money
-        }
-        self.api_key = key_id
-        self.api_secret = secret.decode() if isinstance(secret, bytes) else secret
-        return self.make_request("POST", "inverterDay", params)
+    client = SolisCloudAPI(api_key, api_secret)
+    stations = client.get_all_stations()
+
+    if stations:
+        print(f"\n✅ SUCCESS: Found {len(stations)} station(s).\n")
+        for s in stations:
+            print(f"Station: {s.get('stationName')} | ID: {s.get('id')}")
+            inverters = client.get_inverters_by_station(s.get('id'))
+            if inverters:
+                for inv in inverters:
+                    print(f"  - Inverter SN: {inv.get('sn')} | ID: {inv.get('id')}")
+            else:
+                print("  - No inverters found")
+    else:
+        print("\n❌ FAILED: Could not fetch stations. Invalid API key/secret or no data.")
