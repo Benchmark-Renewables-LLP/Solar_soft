@@ -20,13 +20,14 @@ if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding='utf-8')
     except Exception as e:
-        print(f"Failed to reconfigure stdout encoding: {e}")
+        print(f"Failed to reconfigure stdout encoding: {e}", file=sys.stderr)
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
 from config.settings import DATABASE_URL, COMPANY_KEY, BATCH_SIZE
 from shinemonitor_api import ShinemonitorAPI
 from soliscloud_api import SolisCloudAPI
+from solarman_api import SolarmanAPI, json_to_csv
 
 # Custom StreamHandler to handle Unicode characters in console output
 class UnicodeSafeStreamHandler(logging.StreamHandler):
@@ -41,22 +42,38 @@ class UnicodeSafeStreamHandler(logging.StreamHandler):
             stream.write(msg + self.terminator)
             self.flush()
 
+# Custom RotatingFileHandler with line buffering for real-time logging
+class RealTimeRotatingFileHandler(RotatingFileHandler):
+    def __init__(self, filename, mode='a', maxBytes=0, backupCount=0, encoding=None, delay=False):
+        super().__init__(filename, mode=mode, maxBytes=maxBytes, backupCount=backupCount, encoding=encoding, delay=delay)
+        if self.stream is not None:
+            self.stream.close()
+            self.stream = None
+        self.stream = open(self.baseFilename, self.mode, buffering=1, encoding=self.encoding)
+
 # Configure logging with rotation and UTF-8 encoding
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        RotatingFileHandler('fetch_historic_data.log', maxBytes=10*1024*1024, backupCount=5, encoding='utf-8'),
-        UnicodeSafeStreamHandler(sys.stdout)
-    ]
-)
-logger = logging.getLogger(__name__)
+try:
+    log_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'logs'))
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, 'fetch_historic_data.log')
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            RealTimeRotatingFileHandler(log_file, maxBytes=10*1024*1024, backupCount=5, encoding='utf-8'),
+            UnicodeSafeStreamHandler(sys.stdout)
+        ]
+    )
+    logger = logging.getLogger(__name__)
+    logger.info(f"Logging initialized with real-time writes. Log file: {log_file}")
+except Exception as e:
+    print(f"Failed to configure logging: {e}", file=sys.stderr)
+    raise
 
 # Load environment variables
 load_dotenv()
-
-# Constants for Solarman API
-SOLARMAN_BASE_URL = "https://api.solarmanpv.com"
+SAVE_CSV = os.getenv('SAVE_CSV', 'False').lower() == 'true'
 
 def convert_timestamp_to_date(timestamp, default='1970-01-01'):
     """Convert a Unix timestamp (in milliseconds or seconds) to YYYY-MM-DD format."""
@@ -218,7 +235,6 @@ def insert_data_to_db(conn, data, device_sn):
     """Insert historical data into the device_data_historical table."""
     try:
         with conn.cursor() as cur:
-            # Flatten data recursively
             flattened_data = flatten_data(data)
             logger.debug(f"Flattened data for device {device_sn} ({len(flattened_data)} entries): {flattened_data}")
 
@@ -315,144 +331,6 @@ def insert_data_to_db(conn, data, device_sn):
         conn.rollback()
         raise
 
-# Solarman API Helper Functions
-def authenticate_solarman(app_id, app_secret, username, password):
-    """Authenticate with Solarman API."""
-    try:
-        url = f"{SOLARMAN_BASE_URL}/account/v1.0/token?appId={app_id}&language=en"
-        payload = {
-            "appSecret": app_secret,
-            "email": username,
-            "password": hashlib.sha256(password.encode('utf-8')).hexdigest()
-        }
-        response = requests.post(url, json=payload, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        if not data.get("success"):
-            logger.error(f"Solarman authentication failed for {username}: {data.get('msg')}")
-            return None
-        logger.info(f"Solarman authentication successful for {username}")
-        return data["access_token"]
-    except Exception as e:
-        logger.error(f"Solarman authentication error for {username}: {e}")
-        return None
-
-def fetch_plants_solarman(user_id, username, password, access_token):
-    """Fetch plant list from Solarman API."""
-    try:
-        url = f"{SOLARMAN_BASE_URL}/station/v1.0/list?language=en"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {access_token}"
-        }
-        payload = {"size": 20, "page": 1}
-        response = requests.post(url, headers=headers, json=payload, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        if not data.get("success"):
-            logger.error(f"Error fetching Solarman plants for {username}: {data.get('msg')}")
-            return []
-        plants = data.get("stationList", [])
-        return [
-            {
-                "plant_id": p["id"],
-                "plant_name": p.get("stationName"),
-                "capacity": float(p.get("designedPower", 0)),
-                "total_energy": float(p.get("totalGeneration", 0)),
-                "install_date": p.get("createDate")
-            }
-            for p in plants
-        ]
-    except Exception as e:
-        logger.error(f"Error fetching Solarman plants for {username}: {e}")
-        return []
-
-def fetch_devices_solarman(user_id, username, password, plant_id, access_token):
-    """Fetch devices for a specific plant from Solarman API."""
-    try:
-        url = f"{SOLARMAN_BASE_URL}/station/v1.0/device?language=en"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {access_token}"
-        }
-        payload = {"stationId": plant_id, "deviceType": "INVERTER", "size": 10, "page": 1}
-        response = requests.post(url, headers=headers, json=payload, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        if not data.get("success"):
-            logger.error(f"Error fetching devices for plant {plant_id}: {data.get('msg')}")
-            return []
-        devices = data.get("deviceListItems", [])
-        return [
-            {
-                "sn": d["deviceSn"],
-                "first_install_date": d.get("createDate"),
-                "inverter_model": d.get("deviceModel", "Unknown"),
-                "panel_model": "Unknown",
-                "pv_count": 0,  # Not available in Solarman response; set to 0
-                "string_count": 0  # Not available in Solarman response; set to 0
-            }
-            for d in devices
-        ]
-    except Exception as e:
-        logger.error(f"Error fetching devices for plant {plant_id}: {e}")
-        return []
-
-def fetch_historical_solarman(user_id, username, password, device, start_date, end_date, access_token):
-    """Fetch historical data for a device from Solarman API."""
-    try:
-        url = f"{SOLARMAN_BASE_URL}/device/v1.0/historical?language=en"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {access_token}"
-        }
-        payload = {
-            "deviceSn": device["sn"],
-            "startTime": f"{start_date} 00:00:00",
-            "endTime": f"{end_date} 23:59:59",
-            "timeType": 1  # 1 for 5-minute intervals
-        }
-        response = requests.post(url, headers=headers, json=payload, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        if not data.get("success"):
-            logger.error(f"Error fetching historical data for device {device['sn']}: {data.get('msg')}")
-            return []
-        data_list = data.get("dataList", [])
-        if not data_list:
-            return []
-        historical_data = []
-        for item in data_list:
-            timestamp = item.get("collectTime")
-            if not timestamp:
-                continue
-            try:
-                ts = datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
-            except ValueError:
-                logger.warning(f"Invalid timestamp format for device {device['sn']}: {timestamp}")
-                continue
-            entry = {"device_id": device["sn"], "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S")}
-            for param in item.get("params", []):
-                key = param.get("key", "").lower()
-                value = param.get("value")
-                if not value or value == "":
-                    continue
-                if "power" in key:
-                    entry["total_power"] = float(value)
-                elif "voltage" in key and "pv1" in key:
-                    entry["pv01_voltage"] = float(value)
-                elif "current" in key and "pv1" in key:
-                    entry["pv01_current"] = float(value)
-                elif "state" in key or "status" in key:
-                    entry["state"] = value
-                elif "energy" in key and "today" in key:
-                    entry["energy_today"] = float(value)
-            historical_data.append(entry)
-        return historical_data
-    except Exception as e:
-        logger.error(f"Error fetching historical data for device {device['sn']}: {e}")
-        return []
-
 def fetch_historic_data():
     logger.info("Starting fetch_historic_data script...")
     conn = get_db_connection()
@@ -486,19 +364,16 @@ def fetch_historic_data():
                 fetch_historical = api_client.get_inverter_historical_data
                 fetch_real_time = api_client.get_inverter_real_time_data
                 plant_id_key = 'station_id'
-                access_token = None
             elif api_provider == 'solarman':
                 if not api_key or not api_secret:
                     logger.warning(f"No API key/secret for Solarman user {user_id}, skipping.")
                     continue
-                access_token = authenticate_solarman(api_key, api_secret, username, password)
-                if not access_token:
-                    logger.warning(f"Authentication failed for Solarman user {user_id}, skipping.")
-                    continue
-                fetch_plants = fetch_plants_solarman
-                fetch_devices = fetch_devices_solarman
-                fetch_historical = fetch_historical_solarman
-                fetch_real_time = lambda u, un, pw, d: fetch_historical_solarman(u, un, pw, d, datetime.now().strftime('%Y-%m-%d'), datetime.now().strftime('%Y-%m-%d'), access_token)
+                api_client = SolarmanAPI(username, password, api_key, api_secret, base_url=os.getenv('SOLARMAN_BASE_URL', 'https://globalapi.solarmanpv.com'))
+                logger.debug(f"Using Solarman API for user {user_id}")
+                fetch_plants = api_client.get_plant_list
+                fetch_devices = lambda u, un, pw, pid: api_client.get_all_devices(pid, device_type="INVERTER")
+                fetch_historical = api_client.get_historical_data
+                fetch_real_time = api_client.get_current_data
                 plant_id_key = 'plant_id'
             else:  # Default to Shinemonitor
                 api_client = ShinemonitorAPI(COMPANY_KEY) if COMPANY_KEY else ShinemonitorAPI()
@@ -509,14 +384,9 @@ def fetch_historic_data():
                     u, un, pw, d, datetime.now().strftime('%Y-%m-%d'), datetime.now().strftime('%Y-%m-%d')
                 )
                 plant_id_key = 'plant_id'
-                access_token = None
 
             try:
-                # Pass access_token to fetch_plants if Solarman
-                if api_provider == 'solarman':
-                    plants = fetch_plants(user_id, username, password, access_token)
-                else:
-                    plants = fetch_plants(user_id, username, password)
+                plants = fetch_plants(user_id, username, password)
                 if not plants:
                     logger.warning(f"No plants found for user {user_id}, skipping.")
                     continue
@@ -553,11 +423,7 @@ def fetch_historic_data():
 
                 plant_id = plant[plant_id_key]
                 try:
-                    # Pass access_token to fetch_devices if Solarman
-                    if api_provider == 'solarman':
-                        devices = fetch_devices(user_id, username, password, plant_id, access_token)
-                    else:
-                        devices = fetch_devices(user_id, username, password, plant_id)
+                    devices = fetch_devices(user_id, username, password, plant_id)
                     if not devices:
                         logger.warning(f"No devices found for plant {plant_id}")
                         continue
@@ -601,24 +467,19 @@ def fetch_historic_data():
                             retry=retry_if_exception_type(requests_exceptions.RequestException)
                         )
                         def fetch_real_time_with_retry():
-                            if api_provider == 'solarman':
-                                return fetch_real_time(user_id, username, password, device)
                             return fetch_real_time(user_id, username, password, device)
 
                         real_time_response = fetch_real_time_with_retry()
                         logger.debug(f"Raw real-time response for device {device['sn']}: {real_time_response}")
-                        if api_provider == 'soliscloud':
-                            if not real_time_response:
-                                logger.warning(f"No real-time data for device {device['sn']}")
-                                real_time_data = []
-                            else:
-                                real_time_data = [real_time_response]
-                        else:
-                            real_time_data = real_time_response if real_time_response else []
-
-                        if real_time_data:
-                            logger.info(f"Received {len(real_time_data)} real-time data entries for device {device['sn']}")
-                            insert_data_to_db(conn, real_time_data, device['sn'])
+                        if real_time_response:
+                            logger.info(f"Received {len(real_time_response)} real-time data entries for device {device['sn']}")
+                            insert_data_to_db(conn, real_time_response, device['sn'])
+                            if SAVE_CSV:
+                                csv_data = json_to_csv({"deviceSn": device['sn'], "deviceType": "INVERTER", "dataList": real_time_response})
+                                csv_filename = f"current_data_{device['sn']}.csv"
+                                with open(os.path.join(log_dir, csv_filename), 'w', newline='', encoding='utf-8') as f:
+                                    f.write(csv_data)
+                                logger.info(f"Saved current data to {csv_filename}")
                         else:
                             logger.warning(f"No real-time data for device {device['sn']}")
 
@@ -631,8 +492,6 @@ def fetch_historic_data():
                             retry=retry_if_exception_type(requests_exceptions.RequestException)
                         )
                         def fetch_historical_with_retry():
-                            if api_provider == 'solarman':
-                                return fetch_historical(user_id, username, password, device, start_date, end_date, access_token)
                             return fetch_historical(user_id, username, password, device, start_date, end_date)
 
                         historical_data = fetch_historical_with_retry()
@@ -640,11 +499,16 @@ def fetch_historic_data():
                         if not historical_data:
                             logger.warning(f"No historical data for device {device['sn']}")
                             continue
-                        # Flatten historical data before insertion
                         flattened_historical_data = flatten_data(historical_data)
                         logger.debug(f"Flattened historical data for device {device['sn']} ({len(flattened_historical_data)} entries): {flattened_historical_data}")
                         logger.info(f"Received {len(flattened_historical_data)} historical data entries for device {device['sn']}")
                         insert_data_to_db(conn, flattened_historical_data, device['sn'])
+                        if SAVE_CSV:
+                            csv_data = json_to_csv({"deviceSn": device['sn'], "deviceType": "INVERTER", "paramDataList": [{"collectTime": d['timestamp'], "dataList": [{"key": k, "value": v} for k, v in d.items() if k in ['total_power', 'pv01_voltage', 'pv01_current', 'state', 'energy_today']]} for d in flattened_historical_data]})
+                            csv_filename = f"historical_data_{device['sn']}.csv"
+                            with open(os.path.join(log_dir, csv_filename), 'w', newline='', encoding='utf-8') as f:
+                                f.write(csv_data)
+                            logger.info(f"Saved historical data to {csv_filename}")
                     except Exception as e:
                         logger.error(f"Failed to fetch or insert data for device {device['sn']}: {e}")
                         conn.rollback()
