@@ -1,90 +1,21 @@
 import json
 import logging
 import time
-import csv
-import io
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
-import requests
 from dateutil import tz
+import requests
 
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler()]
+)
 logger = logging.getLogger(__name__)
 
-def json_to_csv(json_data: Dict) -> str:
-    output = io.StringIO()
-    writer = csv.DictWriter(
-        output,
-        fieldnames=["collectTime", "deviceSn", "deviceType", "name", "value", "unit", "key"],
-        lineterminator='\n'
-    )
-    writer.writeheader()
-
-    device_sn = json_data.get("deviceSn", "")
-    device_type = json_data.get("deviceType", "")
-
-    param_data_list = json_data.get("paramDataList", [])
-    if param_data_list:
-        for param_data in param_data_list:
-            collect_time_raw = param_data.get("collectTime", "")
-            if isinstance(collect_time_raw, str):
-                collect_time = collect_time_raw
-            else:
-                collect_time = datetime.utcfromtimestamp(int(collect_time_raw)).strftime('%Y-%m-%d %H:%M:%S')
-            data_list = param_data.get("dataList", [])
-
-            for item in data_list:
-                row = {
-                    "collectTime": collect_time,
-                    "deviceSn": device_sn,
-                    "deviceType": device_type,
-                    "name": item.get("name", ""),
-                    "value": item.get("value", ""),
-                    "unit": item.get("unit", ""),
-                    "key": item.get("key", "")
-                }
-                writer.writerow(row)
-    else:
-        data_list = json_data.get("dataList", [])
-        collect_time = datetime.now(tz.tzutc()).strftime('%Y-%m-%d %H:%M:%S')
-        for item in data_list:
-            row = {
-                "collectTime": collect_time,
-                "deviceSn": device_sn,
-                "deviceType": device_type,
-                "name": item.get("name", ""),
-                "value": item.get("value", ""),
-                "unit": item.get("unit", ""),
-                "key": item.get("key", "")
-                }
-            writer.writerow(row)
-
-    csv_content = output.getvalue()
-    output.close()
-    return csv_content
-
-def json_to_name_columns_csv(json_data: Dict) -> str:
-    output = io.StringIO()
-    data_list = json_data.get("dataList", [])
-    
-    fieldnames = [item.get("name", "") for item in data_list]
-    writer = csv.DictWriter(
-        output,
-        fieldnames=fieldnames,
-        lineterminator='\n',
-        quoting=csv.QUOTE_MINIMAL
-    )
-    writer.writeheader()
-
-    row = {item.get("name", ""): item.get("value", "") for item in data_list}
-    writer.writerow(row)
-
-    csv_content = output.getvalue()
-    output.close()
-    return csv_content
-
 class SolarmanAPI:
-    def __init__(self, email: str, password_sha256: str, app_id: str, app_secret: str, base_url: str = "https://globalapi.solarmanpv.com"):
-        self.base_url = base_url
+    def __init__(self, email: str, password_sha256: str, app_id: str, app_secret: str):
+        self.base_url = "https://globalapi.solarmanpv.com"
         self.email = email
         self.password_sha256 = password_sha256
         self.app_id = app_id
@@ -132,13 +63,7 @@ class SolarmanAPI:
             logger.error(f"Error obtaining access token: {str(e)}")
             raise
 
-    def _make_request(
-        self,
-        method: str,
-        endpoint: str,
-        params: Optional[Dict] = None,
-        data: Optional[Dict] = None,
-    ) -> Dict:
+    def _make_request(self, method: str, endpoint: str, params: Optional[Dict] = None, data: Optional[Dict] = None) -> Dict:
         if self._is_token_expired():
             logger.info("Access token expired or not set. Obtaining new token...")
             self.get_access_token()
@@ -165,161 +90,125 @@ class SolarmanAPI:
                 logger.error(f"API request failed: {result.get('msg')}")
                 raise Exception(f"API request failed: {result.get('msg')}")
             return result
-
         except requests.RequestException as e:
             logger.error(f"Error making API request: {str(e)}")
             if hasattr(e, "response") and e.response is not None:
                 logger.error(f"Response content: {e.response.text}")
             raise
 
-    def get_plant_list(self) -> List[Dict]:
+    def get_plant_list(self, user_id: str, username: str, password: str) -> List[Dict]:
         endpoint = "/station/v1.0/list?language=en"
         try:
             response = self._make_request("POST", endpoint, data={})
-            return [
-                {
-                    "plant_id": p["id"],
-                    "plant_name": p.get("stationName", p.get("name", "Unknown")),
-                    "capacity": float(p.get("designedPower", 0)),
-                    "total_energy": float(p.get("totalGeneration", 0)),
-                    "install_date": p.get("createDate")
-                }
-                for p in response.get("stationList", [])
-            ]
+            return response.get("stationList", [])
         except Exception as e:
             logger.error(f"Error fetching plant list: {str(e)}")
             raise
 
-    def get_all_devices(self, plant_id: int, device_type: Optional[str] = None) -> List[Dict]:
+    def get_all_devices(self, user_id: str, username: str, password: str, plant_id: str) -> List[Dict]:
         endpoint = "/station/v1.0/device?language=en"
-        payload = {"stationId": plant_id}
-        if device_type:
-            payload["deviceType"] = device_type
+        payload = {"stationId": plant_id, "deviceType": "INVERTER"}
         try:
             response = self._make_request("POST", endpoint, data=payload)
-            devices = response.get("deviceListItems") or response.get("deviceList", [])
-            return [
-                {
-                    "sn": d["deviceSn"],
-                    "first_install_date": d.get("createDate"),
-                    "inverter_model": d.get("deviceModel", "Unknown"),
-                    "panel_model": "Unknown",
-                    "pv_count": 0,
-                    "string_count": 0
-                }
-                for d in devices
-            ]
+            return response.get("deviceListItems", []) or response.get("deviceList", [])
         except Exception as e:
             logger.error(f"Error fetching devices for plant {plant_id}: {str(e)}")
             raise
 
-    def get_historical_data(
-        self,
-        device: Dict,
-        start_date: str,
-        end_date: str,
-        time_type: int = 1
-    ) -> List[Dict]:
+    def get_historical_data(self, user_id: str, username: str, password: str, device: Dict, start_date: str, end_date: str) -> List[Dict]:
         endpoint = "/device/v1.0/historical?language=en"
         try:
-            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
-            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+            start_dt = datetime.strptime(start_date, '%Y-%m-%d').replace(tzinfo=tz.tzutc())
+            end_dt = datetime.strptime(end_date, '%Y-%m-%d').replace(hour=23, minute=59, second=59, tzinfo=tz.tzutc())
+            now = datetime.now(tz.tzutc())
+            if end_dt > now:
+                end_dt = now
+            if start_dt >= end_dt:
+                raise ValueError("start_date must be before end_date")
         except ValueError as e:
-            logger.error(f"Invalid date format. Use YYYY-MM-DD: {str(e)}")
+            logger.error(f"Invalid date format for Solarman: {str(e)}")
             raise
-
-        utc = tz.tzutc()
-        now = datetime.now(utc)
-        start_dt = start_dt.replace(tzinfo=utc)
-        end_dt = end_dt.replace(hour=23, minute=59, second=59, tzinfo=utc)
-
-        if end_dt > now:
-            end_dt = now
-        if start_dt >= end_dt:
-            raise ValueError("start_date must be before end_date")
 
         payload = {
             "deviceSn": device.get("deviceSn", ""),
             "deviceType": device.get("deviceType", "INVERTER"),
             "startTime": start_dt.strftime('%Y-%m-%d'),
             "endTime": end_dt.strftime('%Y-%m-%d'),
-            "timeType": time_type
+            "timeType": 1  # 5-minute intervals
         }
-        logger.debug(f"Requesting historical data with payload: {json.dumps(payload, indent=2, ensure_ascii=False)}")
-
         try:
             response = self._make_request("POST", endpoint, data=payload)
-            data_list = response.get("paramDataList", [])
-            historical_data = []
-            for item in data_list:
-                timestamp = item.get("collectTime")
-                if not timestamp:
-                    continue
-                try:
-                    ts = datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
-                except ValueError:
-                    logger.warning(f"Invalid timestamp format for device {device.get('deviceSn', 'unknown')}: {timestamp}")
-                    continue
-                entry = {"device_id": device["deviceSn"], "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S")}
-                for param in item.get("dataList", []):
-                    key = param.get("key", "").lower()
-                    value = param.get("value")
-                    if not value or value == "":
-                        continue
-                    if "power" in key:
-                        entry["total_power"] = float(value)
-                    elif "voltage" in key and "pv1" in key:
-                        entry["pv01_voltage"] = float(value)
-                    elif "current" in key and "pv1" in key:
-                        entry["pv01_current"] = float(value)
-                    elif "state" in key or "status" in key:
-                        entry["state"] = value
-                    elif "energy" in key and "today" in key:
-                        entry["energy_today"] = float(value)
-                historical_data.append(entry)
-            return historical_data
+            param_data_list = response.get("paramDataList", [])
+            normalized_data = []
+            for param_data in param_data_list:
+                collect_time = param_data.get("collectTime")
+                if isinstance(collect_time, (int, float)):
+                    collect_time = datetime.fromtimestamp(collect_time / 1000 if len(str(int(collect_time))) > 10 else collect_time).strftime('%Y-%m-%d %H:%M:%S')
+                data_list = param_data.get("dataList", [])
+                entry = {"timestamp": collect_time}
+                for item in data_list:
+                    key = item.get("key", "").lower()
+                    value = item.get("value")
+                    if key in ['pv1_voltage', 'pv2_voltage', 'pv3_voltage', 'pv4_voltage', 'pv5_voltage', 'pv6_voltage', 'pv7_voltage', 'pv8_voltage', 'pv9_voltage', 'pv10_voltage', 'pv11_voltage', 'pv12_voltage']:
+                        entry[key.replace('pv1_', 'pv01_').replace('pv2_', 'pv02_').replace('pv3_', 'pv03_').replace('pv4_', 'pv04_').replace('pv5_', 'pv05_').replace('pv6_', 'pv06_').replace('pv7_', 'pv07_').replace('pv8_', 'pv08_').replace('pv9_', 'pv09_')] = value
+                    elif key in ['pv1_current', 'pv2_current', 'pv3_current', 'pv4_current', 'pv5_current', 'pv6_current', 'pv7_current', 'pv8_current', 'pv9_current', 'pv10_current', 'pv11_current', 'pv12_current']:
+                        entry[key.replace('pv1_', 'pv01_').replace('pv2_', 'pv02_').replace('pv3_', 'pv03_').replace('pv4_', 'pv04_').replace('pv5_', 'pv05_').replace('pv6_', 'pv06_').replace('pv7_', 'pv07_').replace('pv8_', 'pv08_').replace('pv9_', 'pv09_')] = value
+                    elif key in ['r_voltage', 's_voltage', 't_voltage', 'r_current', 's_current', 't_current', 'rs_voltage', 'st_voltage', 'tr_voltage']:
+                        entry[key] = value
+                    elif key == 'frequency':
+                        entry['frequency'] = value
+                    elif key in ['total_power', 'power']:
+                        entry['total_power'] = value
+                    elif key in ['reactive_power']:
+                        entry['reactive_power'] = value
+                    elif key in ['energy_today', 'e_day']:
+                        entry['energy_today'] = value
+                    elif key in ['pr']:
+                        entry['pr'] = value
+                    elif key in ['state', 'status']:
+                        entry['state'] = value
+                normalized_data.append(entry)
+            return normalized_data
         except Exception as e:
-            logger.error(f"Error fetching historical data for device {device.get('deviceSn', 'unknown')}: {str(e)}")
+            logger.error(f"Error fetching Solarman historical data for {device.get('deviceSn')}: {str(e)}")
             raise
 
-    def get_current_data(
-        self,
-        device: Dict,
-        language: str = "en"
-    ) -> List[Dict]:
+    def get_current_data(self, user_id: str, username: str, password: str, device: Dict) -> List[Dict]:
         endpoint = "/device/v1.0/currentData"
-        params = {"language": language}
-        payload = {
-            "deviceSn": device.get("deviceSn", ""),
-        }
-        if "deviceId" in device and device["deviceId"]:
+        params = {"language": "en"}
+        payload = {"deviceSn": device.get("deviceSn", "")}
+        if "deviceId" in device:
             payload["deviceId"] = device["deviceId"]
-
-        logger.debug(f"Requesting current data with payload: {json.dumps(payload, indent=2, ensure_ascii=False)}")
-
         try:
             response = self._make_request("POST", endpoint, params=params, data=payload)
             data_list = response.get("dataList", [])
-            current_data = []
-            timestamp = datetime.now(tz.tzutc()).strftime('%Y-%m-%d %H:%M:%S')
+            collect_time = datetime.now(tz.tzutc()).strftime('%Y-%m-%d %H:%M:%S')
+            normalized_data = []
+            entry = {"timestamp": collect_time}
             for item in data_list:
-                entry = {"device_id": device["deviceSn"], "timestamp": timestamp}
                 key = item.get("key", "").lower()
                 value = item.get("value")
-                if not value or value == "":
-                    continue
-                if "power" in key:
-                    entry["total_power"] = float(value)
-                elif "voltage" in key and "pv1" in key:
-                    entry["pv01_voltage"] = float(value)
-                elif "current" in key and "pv1" in key:
-                    entry["pv01_current"] = float(value)
-                elif "state" in key or "status" in key:
-                    entry["state"] = value
-                elif "energy" in key and "today" in key:
-                    entry["energy_today"] = float(value)
-                current_data.append(entry)
-            return current_data
+                if key in ['pv1_voltage', 'pv2_voltage', 'pv3_voltage', 'pv4_voltage', 'pv5_voltage', 'pv6_voltage', 'pv7_voltage', 'pv8_voltage', 'pv9_voltage', 'pv10_voltage', 'pv11_voltage', 'pv12_voltage']:
+                    entry[key.replace('pv1_', 'pv01_').replace('pv2_', 'pv02_').replace('pv3_', 'pv03_').replace('pv4_', 'pv04_').replace('pv5_', 'pv05_').replace('pv6_', 'pv06_').replace('pv7_', 'pv07_').replace('pv8_', 'pv08_').replace('pv9_', 'pv09_')] = value
+                elif key in ['pv1_current', 'pv2_current', 'pv3_current', 'pv4_current', 'pv5_current', 'pv6_current', 'pv7_current', 'pv8_current', 'pv9_current', 'pv10_current', 'pv11_current', 'pv12_current']:
+                    entry[key.replace('pv1_', 'pv01_').replace('pv2_', 'pv02_').replace('pv3_', 'pv03_').replace('pv4_', 'pv04_').replace('pv5_', 'pv05_').replace('pv6_', 'pv06_').replace('pv7_', 'pv07_').replace('pv8_', 'pv08_').replace('pv9_', 'pv09_')] = value
+                elif key in ['r_voltage', 's_voltage', 't_voltage', 'r_current', 's_current', 't_current', 'rs_voltage', 'st_voltage', 'tr_voltage']:
+                    entry[key] = value
+                elif key == 'frequency':
+                    entry['frequency'] = value
+                elif key in ['total_power', 'power']:
+                    entry['total_power'] = value
+                elif key in ['reactive_power']:
+                    entry['reactive_power'] = value
+                elif key in ['energy_today', 'e_day']:
+                    entry['energy_today'] = value
+                elif key in ['pr']:
+                    entry['pr'] = value
+                elif key in ['state', 'status']:
+                    entry['state'] = value
+            if entry.get("timestamp"):
+                normalized_data.append(entry)
+            return normalized_data
         except Exception as e:
-            logger.error(f"Error fetching current data for device {device.get('deviceSn', 'unknown')}: {str(e)}")
+            logger.error(f"Error fetching Solarman current data for {device.get('deviceSn')}: {str(e)}")
             raise
