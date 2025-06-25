@@ -9,13 +9,12 @@ import re
 import csv
 from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler
-from psycopg2 import connect, OperationalError, errors
+from psycopg2 import connect, OperationalError
 from psycopg2.extras import RealDictCursor
 from requests import exceptions as requests_exceptions
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from dotenv import load_dotenv
-import hashlib
-import requests
+from pytz import timezone
 
 # Ensure console encoding is UTF-8 on Windows
 if sys.platform == "win32":
@@ -26,7 +25,7 @@ if sys.platform == "win32":
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
-from config.settings import DATABASE_URL, COMPANY_KEY, BATCH_SIZE
+from config.settings import DATABASE_URL, COMPANY_KEY
 from shinemonitor_api import ShinemonitorAPI
 from soliscloud_api import SolisCloudAPI
 from solarman_api import SolarmanAPI
@@ -55,34 +54,43 @@ class RealTimeRotatingFileHandler(RotatingFileHandler):
 
 # Configure logging
 try:
-    log_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'logs'))
+    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
     os.makedirs(log_dir, exist_ok=True)
     log_file = os.path.join(log_dir, 'fetch_historic_data.log')
 
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            RealTimeRotatingFileHandler(log_file, maxBytes=10*1024*1024, backupCount=5, encoding='utf-8'),
-            UnicodeSafeStreamHandler(sys.stdout)
-        ]
-    )
-    logger = logging.getLogger(__name__)
+    # Verify file writability
+    with open(log_file, 'a', encoding='utf-8') as f:
+        f.write(f"Log file initialized at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+
+    # Clear any existing handlers to avoid conflicts
+    logging.getLogger('').handlers = []
+
+    file_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setLevel(logging.DEBUG)
+    stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+
+    # Use root logger to capture all logs
+    logger = logging.getLogger('')
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(file_handler)
+    logger.addHandler(stream_handler)
+
     logger.info(f"Logging initialized. Log file: {log_file}")
+    logger.debug("Test log to verify setup immediately after initialization")
 except Exception as e:
-    print(f"Failed to configure logging: {e}", file=sys.stderr)
+    print(f"Failed to configure logging: {str(e)}", file=sys.stderr)
     raise
-
-# Load environment variables
-load_dotenv()
-
 def convert_timestamp_to_date(timestamp, default='1970-01-01'):
     """Convert Unix timestamp to YYYY-MM-DD format."""
     try:
         if isinstance(timestamp, (int, float)):
             if len(str(int(timestamp))) > 10:  # Milliseconds
                 timestamp = timestamp / 1000
-            return datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d')
+            return datetime.fromtimestamp(timestamp, tz=timezone('UTC')).strftime('%Y-%m-%d')
         return timestamp
     except (ValueError, TypeError) as e:
         logger.warning(f"Failed to convert timestamp {timestamp}: {e}")
@@ -197,9 +205,9 @@ def load_credentials_to_db(conn, csv_file):
                         'customer_id': row.get('customer_id', 'default_customer'),
                         'api_provider': row.get('api_provider', 'shinemonitor').lower(),
                         'username': row.get('username', ''),
-                        'password': row.get('password', ''),  # For Shinemonitor/Soliscloud
-                        'email': row.get('user_id', ''),        # For Solarman
-                        'password_sha256': row.get('password', ''),  # For Solarman
+                        'password': row.get('password', ''),
+                        'email': row.get('username', ''),
+                        'password_sha256': row.get('password', ''),
                         'api_key': row.get('api_key', ''),
                         'api_secret': row.get('api_secret', '')
                     }
@@ -289,7 +297,7 @@ def normalize_data_entry(entry, api_provider):
             'total_power': entry.get('total_power'),
             'energy_today': entry.get('energy_today'),
             'pr': entry.get('pr'),
-            'state': entry.get('state'),
+            'state': entry.get('state', 'unknown'),
             'r_voltage': entry.get('r_voltage'),
             's_voltage': entry.get('s_voltage'),
             't_voltage': entry.get('t_voltage'),
@@ -301,36 +309,36 @@ def normalize_data_entry(entry, api_provider):
             normalized[f'pv{i:02d}_voltage'] = entry.get(f'pv{i:02d}_voltage')
             normalized[f'pv{i:02d}_current'] = entry.get(f'pv{i:02d}_current')
     elif api_provider == 'solarman':
-        data_list = entry.get("dataList", [])
-        for item in data_list:
-            key = item.get("key", "").lower()
-            value = item.get("value")
-            if key in ['pv1_voltage', 'pv2_voltage', 'pv3_voltage', 'pv4_voltage', 'pv5_voltage', 'pv6_voltage', 'pv7_voltage', 'pv8_voltage', 'pv9_voltage', 'pv10_voltage', 'pv11_voltage', 'pv12_voltage']:
-                normalized[key] = value
-            elif key in ['pv1_current', 'pv2_current', 'pv3_current', 'pv4_current', 'pv5_current', 'pv6_current', 'pv7_current', 'pv8_current', 'pv9_current', 'pv10_current', 'pv11_current', 'pv12_current']:
-                normalized[key] = value
-            elif key in ['r_voltage', 's_voltage', 't_voltage', 'r_current', 's_current', 't_current', 'rs_voltage', 'st_voltage', 'tr_voltage']:
-                normalized[key] = value
-            elif key == 'frequency':
-                normalized['frequency'] = value
-            elif key in ['total_power', 'power']:
-                normalized['total_power'] = value
-            elif key in ['reactive_power']:
-                normalized['reactive_power'] = value
-            elif key in ['energy_today', 'e_day']:
-                normalized['energy_today'] = value
-            elif key in ['pr']:
-                normalized['pr'] = value
-            elif key in ['state', 'status']:
-                normalized['state'] = value
-        normalized['timestamp'] = entry.get('collectTime') or entry.get('timestamp')
+        normalized.update({
+            'timestamp': entry.get('timestamp') or entry.get('collectTime'),
+        })
+        for i in range(1, 13):
+            normalized[f'pv{i:02d}_voltage'] = entry.get(f'pv{i:02d}_voltage')
+            normalized[f'pv{i:02d}_current'] = entry.get(f'pv{i:02d}_current')
+        normalized.update({
+            'r_voltage': entry.get('r_voltage'),
+            's_voltage': entry.get('s_voltage'),
+            't_voltage': entry.get('t_voltage'),
+            'r_current': entry.get('r_current'),
+            's_current': entry.get('s_current'),
+            't_current': entry.get('t_current'),
+            'rs_voltage': entry.get('rs_voltage'),
+            'st_voltage': entry.get('st_voltage'),
+            'tr_voltage': entry.get('tr_voltage'),
+            'frequency': entry.get('frequency'),
+            'total_power': entry.get('total_power'),
+            'reactive_power': entry.get('reactive_power'),
+            'energy_today': entry.get('energy_today'),
+            'pr': entry.get('pr'),
+            'state': entry.get('state', 'unknown'),
+        })
     else:  # Shinemonitor
         normalized.update({
             'timestamp': entry.get('timestamp'),
             'total_power': entry.get('total_power'),
             'energy_today': entry.get('energy_today'),
             'pr': entry.get('pr'),
-            'state': entry.get('state'),
+            'state': entry.get('state', 'unknown'),
             'r_voltage': entry.get('r_voltage'),
             's_voltage': entry.get('s_voltage'),
             't_voltage': entry.get('t_voltage'),
@@ -355,7 +363,7 @@ def flatten_data(data, api_provider, depth=0, max_depth=10):
         logger.error(f"Max recursion depth exceeded: {data}")
         return flattened
     if api_provider == 'solarman':
-        param_data_list = data.get("paramDataList", []) if isinstance(data, dict) else data
+        param_data_list = data if isinstance(data, list) else data.get("paramDataList", [])
         for item in param_data_list:
             if isinstance(item, dict):
                 timestamp = item.get('collectTime') or item.get('timestamp')
@@ -380,7 +388,6 @@ def flatten_data(data, api_provider, depth=0, max_depth=10):
     return flattened
 
 def insert_data_to_db(conn, data, device_sn, customer_id, api_provider, is_real_time=True):
-    """Insert data into customer_{customer_id}_device_data (real-time) or device_data_historical (historical)."""
     try:
         table_name = f"customer_{customer_id.lower()}_device_data" if is_real_time else "device_data_historical"
         flattened_data = flatten_data(data, api_provider)
@@ -391,6 +398,8 @@ def insert_data_to_db(conn, data, device_sn, customer_id, api_provider, is_real_
         inserted_count = 0
         errors = []
         with conn.cursor() as cur:
+            batch_size = 100
+            data_tuples = []
             for entry in flattened_data:
                 if not isinstance(entry, dict):
                     errors.append(("entry_type", str(entry), f"Invalid entry type: {type(entry)}"))
@@ -401,13 +410,20 @@ def insert_data_to_db(conn, data, device_sn, customer_id, api_provider, is_real_
                     continue
                 ts_str = ts_str.strip()
                 try:
-                    if isinstance(ts_str, (int, float)):
-                        ts = datetime.fromtimestamp(ts_str / 1000 if len(str(int(ts_str))) > 10 else ts_str)
+                    if isinstance(ts_str, (int, float)) or (isinstance(ts_str, str) and ts_str.replace('.', '', 1).isdigit()):
+                        ts_float = float(ts_str)
+                        if ts_float > 10**12:  # Likely milliseconds
+                            ts_float = ts_float / 1000
+                        ts = datetime.fromtimestamp(ts_float, tz=timezone('UTC'))
                     else:
-                        ts = datetime.strptime(ts_str, '%Y-%m-%d %H:%M:%S')
+                        ts = datetime.strptime(ts_str, '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone('UTC'))
+                    if api_provider == 'shinemonitor' and ts.minute % 5 != 0:
+                        logger.debug(f"Skipping non-5-minute timestamp for device {device_sn}: {ts_str}")
+                        continue
                     entry_timestamp = ts.strftime('%Y-%m-%d %H:%M:%S')
-                except ValueError:
-                    errors.append(("timestamp", ts_str, "Invalid timestamp format"))
+                except (ValueError, TypeError) as e:
+                    errors.append(("timestamp", ts_str, f"Invalid timestamp format: {str(e)}"))
+                    logger.error(f"Invalid timestamp for device {device_sn}: {ts_str}, error: {str(e)}")
                     continue
 
                 logger.debug(f"Raw API data for device {device_sn} at {entry_timestamp}: {entry}")
@@ -420,11 +436,13 @@ def insert_data_to_db(conn, data, device_sn, customer_id, api_provider, is_real_
                         is_valid, error = validate_parameter(entry[pv_voltage_key], pv_voltage_key, 0, 1000)
                         if not is_valid:
                             validation_errors.append((pv_voltage_key, entry[pv_voltage_key], error))
+                            logger.warning(f"Validation failed for device {device_sn} at {entry_timestamp}: {pv_voltage_key}={entry[pv_voltage_key]}, error: {error}")
                             entry[pv_voltage_key] = None
                     if pv_current_key in entry and entry[pv_current_key] is not None:
                         is_valid, error = validate_parameter(entry[pv_current_key], pv_current_key, 0, 50)
                         if not is_valid:
                             validation_errors.append((pv_current_key, entry[pv_current_key], error))
+                            logger.warning(f"Validation failed for device {device_sn} at {entry_timestamp}: {pv_current_key}={entry[pv_current_key]}, error: {error}")
                             entry[pv_current_key] = None
                 for phase in ['r', 's', 't']:
                     voltage_key = f"{phase}_voltage"
@@ -433,42 +451,52 @@ def insert_data_to_db(conn, data, device_sn, customer_id, api_provider, is_real_
                         is_valid, error = validate_parameter(entry[voltage_key], voltage_key, 0, 300)
                         if not is_valid:
                             validation_errors.append((voltage_key, entry[voltage_key], error))
+                            logger.warning(f"Validation failed for device {device_sn} at {entry_timestamp}: {voltage_key}={entry[voltage_key]}, error: {error}")
                             entry[voltage_key] = None
                     if current_key in entry and entry[current_key] is not None:
                         is_valid, error = validate_parameter(entry[current_key], current_key, 0, 100)
                         if not is_valid:
                             validation_errors.append((current_key, entry[current_key], error))
+                            logger.warning(f"Validation failed for device {device_sn} at {entry_timestamp}: {current_key}={entry[current_key]}, error: {error}")
                             entry[current_key] = None
                 if "total_power" in entry and entry["total_power"] is not None:
                     is_valid, error = validate_parameter(entry["total_power"], "total_power", 0, 100000)
                     if not is_valid:
                         validation_errors.append(("total_power", entry["total_power"], error))
+                        logger.warning(f"Validation failed for device {device_sn} at {entry_timestamp}: total_power={entry['total_power']}, error: {error}")
                         entry["total_power"] = None
                 if "energy_today" in entry and entry["energy_today"] is not None:
                     is_valid, error = validate_parameter(entry["energy_today"], "energy_today", 0, 1000)
                     if not is_valid:
                         validation_errors.append(("energy_today", entry["energy_today"], error))
+                        logger.warning(f"Validation failed for device {device_sn} at {entry_timestamp}: energy_today={entry['energy_today']}, error: {error}")
                         entry["energy_today"] = None
                 if "pr" in entry and entry["pr"] is not None:
                     is_valid, error = validate_parameter(entry["pr"], "pr", 0, 100)
                     if not is_valid:
                         validation_errors.append(("pr", entry["pr"], error))
+                        logger.warning(f"Validation failed for device {device_sn} at {entry_timestamp}: pr={entry['pr']}, error: {error}")
                         entry["pr"] = None
                 if "frequency" in entry and entry["frequency"] is not None:
                     is_valid, error = validate_parameter(entry["frequency"], "frequency", 0, 70)
                     if not is_valid:
                         validation_errors.append(("frequency", entry["frequency"], error))
+                        logger.warning(f"Validation failed for device {device_sn} at {entry_timestamp}: frequency={entry['frequency']}, error: {error}")
                         entry["frequency"] = None
                 if "reactive_power" in entry and entry["reactive_power"] is not None:
                     is_valid, error = validate_parameter(entry["reactive_power"], "reactive_power", -100000, 100000)
                     if not is_valid:
                         validation_errors.append(("reactive_power", entry["reactive_power"], error))
+                        logger.warning(f"Validation failed for device {device_sn} at {entry_timestamp}: reactive_power={entry['reactive_power']}, error: {error}")
                         entry["reactive_power"] = None
 
                 if validation_errors:
                     for field_name, field_value, error_message in validation_errors:
-                        logger.warning(f"Validation error for device {device_sn} at {entry_timestamp}: {field_name}: {error_message}")
                         log_error_to_db(customer_id, device_sn, api_provider, field_name, field_value, error_message)
+                if len(entry) <= 1:  # Skip if only timestamp remains after validation
+                    logger.warning(f"Skipping invalid data entry for device {device_sn} at {entry_timestamp} after validation")
+                    continue
+
                 logger.debug(f"Processed entry for device {device_sn} at {entry_timestamp}: {entry}")
 
                 data_tuple = (
@@ -492,9 +520,33 @@ def insert_data_to_db(conn, data, device_sn, customer_id, api_provider, is_real_
                     entry.get('energy_today'), entry.get('cuf'), entry.get('pr'), entry.get('state'),
                     datetime.now(), datetime.now()
                 )
+                data_tuples.append(data_tuple)
 
+                if len(data_tuples) >= batch_size:
+                    try:
+                        cur.executemany(f"""
+                            INSERT INTO {table_name} (
+                                device_sn, timestamp, pv01_voltage, pv01_current, pv02_voltage, pv02_current,
+                                pv03_voltage, pv03_current, pv04_voltage, pv04_current, pv05_voltage, pv05_current,
+                                pv06_voltage, pv06_current, pv07_voltage, pv07_current, pv08_voltage, pv08_current,
+                                pv09_voltage, pv09_current, pv10_voltage, pv10_current, pv11_voltage, pv11_current,
+                                pv12_voltage, pv12_current, r_voltage, s_voltage, t_voltage,
+                                r_current, s_current, t_current, rs_voltage, st_voltage, tr_voltage,
+                                frequency, total_power, reactive_power, energy_today, cuf, pr, state,
+                                created_at, updated_at
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (device_sn, timestamp) DO NOTHING
+                        """, data_tuples)
+                        inserted_count += cur.rowcount
+                        data_tuples = []
+                    except Exception as e:
+                        logger.error(f"Failed to insert batch for device {device_sn}: {e}")
+                        log_error_to_db(customer_id, device_sn, api_provider, "insert_data_batch", str(data_tuples), str(e))
+                        data_tuples = []
+
+            if data_tuples:
                 try:
-                    cur.execute(f"""
+                    cur.executemany(f"""
                         INSERT INTO {table_name} (
                             device_sn, timestamp, pv01_voltage, pv01_current, pv02_voltage, pv02_current,
                             pv03_voltage, pv03_current, pv04_voltage, pv04_current, pv05_voltage, pv05_current,
@@ -506,12 +558,11 @@ def insert_data_to_db(conn, data, device_sn, customer_id, api_provider, is_real_
                             created_at, updated_at
                         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (device_sn, timestamp) DO NOTHING
-                    """, data_tuple)
+                    """, data_tuples)
                     inserted_count += cur.rowcount
                 except Exception as e:
-                    logger.error(f"Failed to insert data entry for device {device_sn} at {entry_timestamp}: {e}")
-                    log_error_to_db(customer_id, device_sn, api_provider, "insert_data", str(data_tuple), str(e))
-                    continue
+                    logger.error(f"Failed to insert final batch for device {device_sn}: {e}")
+                    log_error_to_db(customer_id, device_sn, api_provider, "insert_data_batch", str(data_tuples), str(e))
 
             for field_name, field_value, error_message in errors:
                 log_error_to_db(customer_id, device_sn, api_provider, field_name, field_value, error_message)
@@ -523,7 +574,6 @@ def insert_data_to_db(conn, data, device_sn, customer_id, api_provider, is_real_
         log_error_to_db(customer_id, device_sn, api_provider, "insert_data_batch", str(device_sn), str(e))
         conn.rollback()
         raise
-
 def refresh_customer_metrics(conn):
     """Refresh customer_metrics materialized view."""
     try:
@@ -575,8 +625,8 @@ def fetch_historic_data():
             customer_id = credential['customer_id']
             username = credential['username']
             password = credential['password']
-            email = user_id
-            password_sha256 = password
+            email = credential.get('username')
+            password_sha256 = credential.get('password')
             api_key = credential.get('api_key')
             api_secret = credential.get('api_secret')
             api_provider = credential.get('api_provider', 'shinemonitor').lower()
@@ -708,8 +758,8 @@ def fetch_historic_data():
                             logger.warning(f"No real-time data for device {device_sn}")
                             log_error_to_db(customer_id, device_sn, api_provider, "fetch_real_time", device_sn, "No real-time data")
 
-                        end_date = datetime.now().strftime('%Y-%m-%d')
-                        start_date = (datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d')
+                        end_date = "2025-06-25"
+                        start_date = "2025-06-22"
 
                         @retry(
                             stop=stop_after_attempt(3),

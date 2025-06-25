@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import sys
+import base64
 from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler
 from io import TextIOWrapper
@@ -278,9 +279,6 @@ class SolisCloudAPI:
                         logger.warning(f"Missing dataTimestamp for record on {date_str}: {record}")
                         continue
                     timestamp = datetime.fromtimestamp(timestamp_ms / 1000, timezone('UTC')).astimezone(timezone('Asia/Kolkata'))
-                    # Ensure 5-minute intervals
-                    if timestamp.minute % 5 != 0:
-                        continue
                     timestamp_str = timestamp.strftime('%Y-%m-%d %H:%M:%S')
 
                     entry = {
