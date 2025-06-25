@@ -65,7 +65,7 @@ class SolarmanAPI:
             else:
                 logger.error(f"Failed to obtain access token: {data.get('msg')}")
                 raise Exception("Failed to obtain access token")
-        except requests.RequestException as e:
+        except requests.exceptions.RequestException as e:
             logger.error(f"Error obtaining access token: {str(e)}")
             raise
 
@@ -101,7 +101,7 @@ class SolarmanAPI:
                 logger.error(f"API request failed: {result.get('msg')}")
                 raise Exception(f"API request failed: {result.get('msg')}")
             return result
-        except requests.RequestException as e:
+        except requests.exceptions.RequestException as e:
             logger.error(f"Error making API request to {endpoint}: {str(e)}")
             if hasattr(e, "response") and e.response is not None:
                 logger.error(f"Response content: {e.response.text}")
@@ -152,14 +152,14 @@ class SolarmanAPI:
             }
             try:
                 response = self._make_request("POST", endpoint, data=payload)
-                time.sleep(1)
+                time.sleep(1)  # Rate limit
                 param_data_list = response.get("paramDataList", [])
                 logger.debug(f"Raw paramDataList for {device.get('deviceSn')} on {current_dt.strftime('%Y-%m-%d')}: {param_data_list}")
                 for param_data in param_data_list:
                     collect_time = param_data.get("collectTime")
                     if isinstance(collect_time, (int, float)):
                         collect_time_dt = datetime.fromtimestamp(collect_time / 1000 if len(str(int(collect_time))) > 10 else collect_time, tz=tz.tzutc())
-                        if now - collect_time_dt < timedelta(minutes=5):  # Reduced from 15 to 5 minutes
+                        if now - collect_time_dt < timedelta(minutes=5):
                             logger.debug(f"Skipping recent timestamp for device {device.get('deviceSn')}: {collect_time}")
                             continue
                         collect_time = collect_time_dt.strftime('%Y-%m-%d %H:%M:%S')
@@ -292,58 +292,3 @@ class SolarmanAPI:
         except Exception as e:
             logger.error(f"Error fetching Solarman current data for {device.get('deviceSn')}: {str(e)}")
             raise
-
-    def get_alerts(self, user_id: str, username: str, password: str, device: Dict, start_date: str, end_date: str) -> List[Dict]:
-        endpoint = "/device/v1.0/alarm?language=en"
-        try:
-            start_dt = datetime.strptime(start_date, '%Y-%m-%d').replace(tzinfo=tz.tzutc())
-            end_dt = datetime.strptime(end_date, '%Y-%m-%d').replace(hour=23, minute=59, second=59, tzinfo=tz.tzutc())
-            now = datetime.now(tz.tzutc())
-            if end_dt > now:
-                end_dt = now
-            if start_dt > end_dt:
-                raise ValueError("start_date must be before end_date")
-        except ValueError as e:
-            logger.error(f"Invalid date format for Solarman alerts: {str(e)}")
-            raise
-
-        normalized_alerts = []
-        current_dt = start_dt
-        while current_dt <= end_dt:
-            payload = {
-                "deviceSn": device.get("deviceSn", ""),
-                "startTime": current_dt.strftime('%Y-%m-%d'),
-                "endTime": current_dt.strftime('%Y-%m-%d'),
-                "pageNo": 1,
-                "pageSize": 100
-            }
-            try:
-                response = self._make_request("POST", endpoint, data=payload)
-                time.sleep(1)
-                alarm_list = response.get("alarmList", [])
-                logger.debug(f"Raw alarmList for {device.get('deviceSn')} on {current_dt.strftime('%Y-%m-%d')}: {alarm_list}")
-                for alarm in alarm_list:
-                    alert_time = alarm.get("addTime")
-                    if isinstance(alert_time, (int, float)):
-                        alert_time_dt = datetime.fromtimestamp(alert_time / 1000 if len(str(int(alert_time))) > 10 else alert_time, tz=tz.tzutc())
-                        alert_time = alert_time_dt.strftime('%Y-%m-%d %H:%M:%S')
-                    entry = {
-                        "device_sn": device.get("deviceSn", ""),
-                        "alert_code": alarm.get("alarmCode", ""),
-                        "alert_message": alarm.get("alarmContent", ""),
-                        "alert_timestamp": alert_time,
-                        "severity": alarm.get("alarmLevel", "UNKNOWN")
-                    }
-                    if all(entry.values()):  # Ensure no empty fields
-                        normalized_alerts.append(entry)
-                    else:
-                        logger.warning(f"Skipping incomplete alert entry for device {device.get('deviceSn')} at {alert_time}")
-                total_records = response.get("total", 0)
-                if len(alarm_list) >= total_records:
-                    break
-                payload["pageNo"] += 1
-            except Exception as e:
-                logger.error(f"Error fetching Solarman alerts for {device.get('deviceSn')} on {current_dt.strftime('%Y-%m-%d')}: {str(e)}")
-                continue
-            current_dt += timedelta(days=1)
-        return normalized_alerts

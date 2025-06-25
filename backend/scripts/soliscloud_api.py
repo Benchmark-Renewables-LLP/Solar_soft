@@ -12,28 +12,43 @@ from logging.handlers import RotatingFileHandler
 from io import TextIOWrapper
 from typing import Any, List, Dict, Optional
 from pytz import timezone
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
-# Configure logging
+# Configure logging with date-based filename
 log_dir = "logs"
 os.makedirs(log_dir, exist_ok=True)
-log_file = os.path.join(log_dir, 'soliscloud_api.log')
+log_date = datetime.now(timezone('Asia/Kolkata')).strftime('%Y%m%d')  # IST date
+log_file = os.path.join(log_dir, f'soliscloud_api_{log_date}.log')
+
+# Verify file writability
+try:
+    with open(log_file, 'a', encoding='utf-8') as f:
+        f.write(f"Log file initialized at {datetime.now(timezone('Asia/Kolkata')).strftime('%Y-%m-%d %H:%M:%S IST')}\n")
+except Exception as e:
+    print(f"Failed to verify log file writability: {e}", file=sys.stderr)
+
 stream_handler = logging.StreamHandler(stream=TextIOWrapper(sys.stdout.buffer, encoding='utf-8'))
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        RotatingFileHandler(log_file, maxBytes=10*1024*1024, backupCount=5),
+        RotatingFileHandler(log_file, maxBytes=10*1024*1024, backupCount=5, encoding='utf-8'),
         stream_handler
     ]
 )
 logger = logging.getLogger(__name__)
 
 class SolisCloudAPI:
-    def __init__(self, api_key: str, api_secret: str, base_url: str = "https://www.soliscloud.com:13333"):
+    def __init__(self, api_key: str, api_secret: str, base_url: str = "https://www.soliscloud.com:13333", rate_limit_delay: float = 0.6):
         self.api_key = api_key.strip()
         self.api_secret = api_secret.strip()
         self.base_url = base_url
-        self.rate_limit_delay = 0.6
+        self.rate_limit_delay = rate_limit_delay
+
+    def set_rate_limit_delay(self, delay: float):
+        """Adjust rate limit delay dynamically."""
+        self.rate_limit_delay = max(0.1, delay)  # Minimum 0.1s
+        logger.info(f"Rate limit delay set to {self.rate_limit_delay}s")
 
     def generate_signature(self, method: str, path: str, content_md5: str, content_type: str, date: str) -> str:
         canonical_content_type = content_type.split(';')[0]
@@ -46,57 +61,49 @@ class SolisCloudAPI:
         ).digest()
         return base64.b64encode(signature).decode('utf-8')
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type(requests.exceptions.RequestException)
+    )
     def make_request(self, method: str, endpoint: str, payload: Optional[Dict] = None) -> Optional[Dict]:
-        max_retries = 3
-        retry_delay = 1
         endpoint = endpoint.lstrip("/")
         path = f"/v1/api/{endpoint}"
         content_type = "application/json;charset=UTF-8"
 
-        for attempt in range(max_retries):
-            timestamp = str(int(time.time()))
-            date_header = datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT")
-            payload_str = json.dumps(payload or {}, separators=(',', ':'))
-            content_md5 = base64.b64encode(hashlib.md5(payload_str.encode('utf-8')).digest()).decode('utf-8')
-            signature = self.generate_signature(method, path, content_md5, content_type, date_header)
+        timestamp = str(int(time.time()))
+        date_header = datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT")
+        payload_str = json.dumps(payload or {}, separators=(',', ':'))
+        content_md5 = base64.b64encode(hashlib.md5(payload_str.encode('utf-8')).digest()).decode('utf-8')
+        signature = self.generate_signature(method, path, content_md5, content_type, date_header)
 
-            headers = {
-                "Content-Type": content_type,
-                "Authorization": f"API {self.api_key}:{signature}",
-                "Timestamp": timestamp,
-                "Date": date_header,
-                "Content-MD5": content_md5
-            }
-            url = f"{self.base_url}{path}"
-            safe_headers = {k: ("***" if k == "Authorization" else v) for k, v in headers.items()}
-            logger.debug(f"Attempt {attempt + 1}/{max_retries}: Making {method} request to {url} with headers: {safe_headers} and payload: {payload}")
+        headers = {
+            "Content-Type": content_type,
+            "Authorization": f"API {self.api_key}:{signature}",
+            "Timestamp": timestamp,
+            "Date": date_header,
+            "Content-MD5": content_md5
+        }
+        safe_headers = {k: ("***" if k == "Authorization" else v) for k, v in headers.items()}
+        logger.debug(f"Making {method} request to {self.base_url}{path} with headers: {safe_headers} and payload: {payload}")
 
-            try:
-                response = requests.request(method, url, headers=headers, json=payload, timeout=30)
-                response.raise_for_status()
-                data = response.json()
-                logger.debug(f"Response from {endpoint}: {data}")
+        try:
+            response = requests.request(method, f"{self.base_url}{path}", headers=headers, json=payload, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            logger.debug(f"Response from {endpoint}: {data}")
 
-                if not data.get("success") or data.get("code") != "0":
-                    error_msg = data.get("msg", "Unknown error")
-                    error_code = data.get("code", "Unknown")
-                    logger.error(f"API error for {endpoint}: {error_msg} (code: {error_code})")
-                    if error_code in ["R0000", "403"]:
-                        logger.error(f"Permission denied for {path}. Check API key permissions.")
-                        return None
-                    if attempt < max_retries - 1:
-                        time.sleep(retry_delay)
-                        continue
-                    return None
-
-                time.sleep(self.rate_limit_delay)
-                return data
-            except requests.exceptions.RequestException as e:
-                logger.error(f"API request failed for /{endpoint}: {e}")
-                if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
-                    continue
+            if not data.get("success") or data.get("code") != "0":
+                error_msg = data.get("msg", "Unknown error")
+                error_code = data.get("code", "Unknown")
+                logger.error(f"API error for {endpoint}: {error_msg} (code: {error_code})")
                 return None
+
+            time.sleep(self.rate_limit_delay)
+            return data
+        except requests.exceptions.RequestException as e:
+            logger.error(f"API request failed for {endpoint}: {str(e)}")
+            return None
 
     def get_all_stations(self, user_id: str, username: str = None, password: str = None) -> List[Dict[str, Any]]:
         page_no = 1
@@ -115,7 +122,7 @@ class SolisCloudAPI:
             for station in stations:
                 create_date = station.get("createDate", 0)
                 if isinstance(create_date, (int, float)):
-                    create_date = datetime.fromtimestamp(create_date / 1000).strftime('%Y-%m-%d')
+                    create_date = datetime.fromtimestamp(create_date / 1000, tz=timezone('UTC')).strftime('%Y-%m-%d')
                 station_data = {
                     "station_id": station.get("id", ""),
                     "plant_name": station.get("stationName", "Unknown"),
@@ -195,7 +202,7 @@ class SolisCloudAPI:
 
         timestamp_ms = int(data.get("dataTimestamp", 0))
         entry = {
-            "timestamp": datetime.fromtimestamp(timestamp_ms / 1000).strftime('%Y-%m-%d %H:%M:%S') if timestamp_ms else datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            "timestamp": datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone('UTC')).strftime('%Y-%m-%d %H:%M:%S') if timestamp_ms else datetime.now(timezone('UTC')).strftime('%Y-%m-%d %H:%M:%S'),
             "total_power": float(data.get("pac", 0.0)),
             "energy_today": float(data.get("eToday", 0.0)),
             "pr": float(data.get("pr", 0.0)),
@@ -233,8 +240,8 @@ class SolisCloudAPI:
             return []
 
         try:
-            start = datetime.strptime(start_date, '%Y-%m-%d')
-            end = datetime.strptime(end_date, '%Y-%m-%d')
+            start = datetime.strptime(start_date, '%Y-%m-%d').replace(tzinfo=timezone('UTC'))
+            end = datetime.strptime(end_date, '%Y-%m-%d').replace(hour=23, minute=59, second=59, tzinfo=timezone('UTC'))
         except ValueError as e:
             logger.error(f"Invalid date format: {e}")
             return []
@@ -265,7 +272,7 @@ class SolisCloudAPI:
                     break
 
                 data = response.get("data", {})
-                records = data.get("page", {}).get("records", []) if isinstance(data, dict) else data
+                records = data.get("page", {}).get("records", [])
                 if not isinstance(records, list):
                     logger.error(f"Invalid records format for device {device['sn']} on {date_str}: {records}")
                     break
@@ -278,7 +285,7 @@ class SolisCloudAPI:
                     if not timestamp_ms:
                         logger.warning(f"Missing dataTimestamp for record on {date_str}: {record}")
                         continue
-                    timestamp = datetime.fromtimestamp(timestamp_ms / 1000, timezone('UTC')).astimezone(timezone('Asia/Kolkata'))
+                    timestamp = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone('UTC'))
                     timestamp_str = timestamp.strftime('%Y-%m-%d %H:%M:%S')
 
                     entry = {
@@ -299,7 +306,7 @@ class SolisCloudAPI:
                         entry[f"pv{i:02d}_current"] = float(record.get(f"iPv{i}", 0.0))
                     historical_data.append(entry)
 
-                total_records = data.get("page", {}).get("total", 0) if isinstance(data, dict) else len(records)
+                total_records = data.get("page", {}).get("total", 0)
                 logger.info(f"Fetched {len(records)} records for device {device['sn']} on {date_str}, page {page_no}. Total: {total_records}")
                 if page_no * page_size >= total_records:
                     break

@@ -52,24 +52,25 @@ class RealTimeRotatingFileHandler(RotatingFileHandler):
             self.stream = None
         self.stream = open(self.baseFilename, self.mode, buffering=1, encoding=self.encoding)
 
-# Configure logging
+# Configure logging with date-based filename
 try:
     log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
     os.makedirs(log_dir, exist_ok=True)
-    log_file = os.path.join(log_dir, 'fetch_historic_data.log')
+    log_date = datetime.now(timezone('Asia/Kolkata')).strftime('%Y%m%d')  # IST date
+    log_file = os.path.join(log_dir, f'fetch_historic_data_{log_date}.log')
 
     # Verify file writability
     with open(log_file, 'a', encoding='utf-8') as f:
-        f.write(f"Log file initialized at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Log file initialized at {datetime.now(timezone('Asia/Kolkata')).strftime('%Y-%m-%d %H:%M:%S IST')}\n")
 
     # Clear any existing handlers to avoid conflicts
     logging.getLogger('').handlers = []
 
-    file_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')
+    file_handler = RealTimeRotatingFileHandler(log_file, maxBytes=10*1024*1024, backupCount=5, encoding='utf-8')
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 
-    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler = UnicodeSafeStreamHandler()
     stream_handler.setLevel(logging.DEBUG)
     stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 
@@ -84,6 +85,7 @@ try:
 except Exception as e:
     print(f"Failed to configure logging: {str(e)}", file=sys.stderr)
     raise
+
 def convert_timestamp_to_date(timestamp, default='1970-01-01'):
     """Convert Unix timestamp to YYYY-MM-DD format."""
     try:
@@ -390,6 +392,7 @@ def flatten_data(data, api_provider, depth=0, max_depth=10):
 def insert_data_to_db(conn, data, device_sn, customer_id, api_provider, is_real_time=True):
     try:
         table_name = f"customer_{customer_id.lower()}_device_data" if is_real_time else "device_data_historical"
+        logger.info(f"Inserting data into {table_name} for device {device_sn}, is_real_time={is_real_time}")
         flattened_data = flatten_data(data, api_provider)
         if not flattened_data:
             logger.warning(f"No valid data to insert for device {device_sn}")
@@ -398,7 +401,7 @@ def insert_data_to_db(conn, data, device_sn, customer_id, api_provider, is_real_
         inserted_count = 0
         errors = []
         with conn.cursor() as cur:
-            batch_size = 100
+            batch_size = 200  # Optimized for scale
             data_tuples = []
             for entry in flattened_data:
                 if not isinstance(entry, dict):
@@ -436,13 +439,13 @@ def insert_data_to_db(conn, data, device_sn, customer_id, api_provider, is_real_
                         is_valid, error = validate_parameter(entry[pv_voltage_key], pv_voltage_key, 0, 1000)
                         if not is_valid:
                             validation_errors.append((pv_voltage_key, entry[pv_voltage_key], error))
-                            logger.warning(f"Validation failed for device {device_sn} at {entry_timestamp}: {pv_voltage_key}={entry[pv_voltage_key]}, error: {error}")
+                            logger.warning(f"Validation failed for device {device_sn} at {entry_timestamp}: {pv_voltage_key}={entry[pv_voltage_key]}, error: {error}, skipped")
                             entry[pv_voltage_key] = None
                     if pv_current_key in entry and entry[pv_current_key] is not None:
                         is_valid, error = validate_parameter(entry[pv_current_key], pv_current_key, 0, 50)
                         if not is_valid:
                             validation_errors.append((pv_current_key, entry[pv_current_key], error))
-                            logger.warning(f"Validation failed for device {device_sn} at {entry_timestamp}: {pv_current_key}={entry[pv_current_key]}, error: {error}")
+                            logger.warning(f"Validation failed for device {device_sn} at {entry_timestamp}: {pv_current_key}={entry[pv_current_key]}, error: {error}, skipped")
                             entry[pv_current_key] = None
                 for phase in ['r', 's', 't']:
                     voltage_key = f"{phase}_voltage"
@@ -451,49 +454,49 @@ def insert_data_to_db(conn, data, device_sn, customer_id, api_provider, is_real_
                         is_valid, error = validate_parameter(entry[voltage_key], voltage_key, 0, 300)
                         if not is_valid:
                             validation_errors.append((voltage_key, entry[voltage_key], error))
-                            logger.warning(f"Validation failed for device {device_sn} at {entry_timestamp}: {voltage_key}={entry[voltage_key]}, error: {error}")
+                            logger.warning(f"Validation failed for device {device_sn} at {entry_timestamp}: {voltage_key}={entry[voltage_key]}, error: {error}, skipped")
                             entry[voltage_key] = None
                     if current_key in entry and entry[current_key] is not None:
                         is_valid, error = validate_parameter(entry[current_key], current_key, 0, 100)
                         if not is_valid:
                             validation_errors.append((current_key, entry[current_key], error))
-                            logger.warning(f"Validation failed for device {device_sn} at {entry_timestamp}: {current_key}={entry[current_key]}, error: {error}")
+                            logger.warning(f"Validation failed for device {device_sn} at {entry_timestamp}: {current_key}={entry[current_key]}, error: {error}, skipped")
                             entry[current_key] = None
                 if "total_power" in entry and entry["total_power"] is not None:
                     is_valid, error = validate_parameter(entry["total_power"], "total_power", 0, 100000)
                     if not is_valid:
                         validation_errors.append(("total_power", entry["total_power"], error))
-                        logger.warning(f"Validation failed for device {device_sn} at {entry_timestamp}: total_power={entry['total_power']}, error: {error}")
+                        logger.warning(f"Validation failed for device {device_sn} at {entry_timestamp}: total_power={entry['total_power']}, error: {error}, skipped")
                         entry["total_power"] = None
                 if "energy_today" in entry and entry["energy_today"] is not None:
                     is_valid, error = validate_parameter(entry["energy_today"], "energy_today", 0, 1000)
                     if not is_valid:
                         validation_errors.append(("energy_today", entry["energy_today"], error))
-                        logger.warning(f"Validation failed for device {device_sn} at {entry_timestamp}: energy_today={entry['energy_today']}, error: {error}")
+                        logger.warning(f"Validation failed for device {device_sn} at {entry_timestamp}: energy_today={entry['energy_today']}, error: {error}, skipped")
                         entry["energy_today"] = None
                 if "pr" in entry and entry["pr"] is not None:
                     is_valid, error = validate_parameter(entry["pr"], "pr", 0, 100)
                     if not is_valid:
                         validation_errors.append(("pr", entry["pr"], error))
-                        logger.warning(f"Validation failed for device {device_sn} at {entry_timestamp}: pr={entry['pr']}, error: {error}")
+                        logger.warning(f"Validation failed for device {device_sn} at {entry_timestamp}: pr={entry['pr']}, error: {error}, skipped")
                         entry["pr"] = None
                 if "frequency" in entry and entry["frequency"] is not None:
                     is_valid, error = validate_parameter(entry["frequency"], "frequency", 0, 70)
                     if not is_valid:
                         validation_errors.append(("frequency", entry["frequency"], error))
-                        logger.warning(f"Validation failed for device {device_sn} at {entry_timestamp}: frequency={entry['frequency']}, error: {error}")
+                        logger.warning(f"Validation failed for device {device_sn} at {entry_timestamp}: frequency={entry['frequency']}, error: {error}, skipped")
                         entry["frequency"] = None
                 if "reactive_power" in entry and entry["reactive_power"] is not None:
                     is_valid, error = validate_parameter(entry["reactive_power"], "reactive_power", -100000, 100000)
                     if not is_valid:
                         validation_errors.append(("reactive_power", entry["reactive_power"], error))
-                        logger.warning(f"Validation failed for device {device_sn} at {entry_timestamp}: reactive_power={entry['reactive_power']}, error: {error}")
+                        logger.warning(f"Validation failed for device {device_sn} at {entry_timestamp}: reactive_power={entry['reactive_power']}, error: {error}, skipped")
                         entry["reactive_power"] = None
 
                 if validation_errors:
                     for field_name, field_value, error_message in validation_errors:
                         log_error_to_db(customer_id, device_sn, api_provider, field_name, field_value, error_message)
-                if len(entry) <= 1:  # Skip if only timestamp remains after validation
+                if len(entry) <= 1:
                     logger.warning(f"Skipping invalid data entry for device {device_sn} at {entry_timestamp} after validation")
                     continue
 
@@ -574,6 +577,48 @@ def insert_data_to_db(conn, data, device_sn, customer_id, api_provider, is_real_
         log_error_to_db(customer_id, device_sn, api_provider, "insert_data_batch", str(device_sn), str(e))
         conn.rollback()
         raise
+
+def aggregate_daily_data(conn, device_sn, customer_id, api_provider):
+    try:
+        logger.info(f"Aggregating daily data for device {device_sn}")
+        with conn.cursor() as cur:
+            cur.execute("""
+                WITH ActiveHours AS (
+                    SELECT 
+                        device_sn,
+                        timestamp,
+                        total_power,
+                        EXTRACT(EPOCH FROM (LEAD(timestamp) OVER (PARTITION BY device_sn ORDER BY timestamp) - timestamp)) / 3600 AS time_diff_hours
+                    FROM device_data_historical
+                    WHERE device_sn = %s AND timestamp >= CURRENT_DATE - INTERVAL '1 day'
+                )
+                INSERT INTO device_data_daily (device_sn, date, total_energy, avg_power, max_voltage, min_voltage, active_hours)
+                SELECT 
+                    device_sn,
+                    DATE(timestamp) AS date,
+                    SUM(energy_today) AS total_energy,
+                    AVG(total_power) AS avg_power,
+                    MAX(GREATEST(r_voltage, s_voltage, t_voltage)) AS max_voltage,
+                    LEAST(r_voltage, s_voltage, t_voltage) AS min_voltage,
+                    COALESCE(SUM(CASE WHEN total_power > 0 THEN time_diff_hours ELSE 0 END), 0) AS active_hours
+                FROM device_data_historical
+                WHERE device_sn = %s AND timestamp >= CURRENT_DATE - INTERVAL '1 day'
+                GROUP BY device_sn, DATE(timestamp)
+                ON CONFLICT (device_sn, date) DO UPDATE
+                SET total_energy = EXCLUDED.total_energy,
+                    avg_power = EXCLUDED.avg_power,
+                    max_voltage = EXCLUDED.max_voltage,
+                    min_voltage = EXCLUDED.min_voltage,
+                    active_hours = EXCLUDED.active_hours,
+                    created_at = NOW();
+            """, (device_sn, device_sn))  # Pass device_sn twice for CTE and main query
+        conn.commit()
+        logger.info(f"Aggregated daily data for device {device_sn}")
+    except Exception as e:
+        logger.error(f"Failed to aggregate daily data for device {device_sn}: {e}")
+        conn.rollback()
+        raise
+
 def refresh_customer_metrics(conn):
     """Refresh customer_metrics materialized view."""
     try:
@@ -612,6 +657,7 @@ def refresh_customer_metrics(conn):
 def fetch_historic_data():
     logger.info("Starting fetch_historic_data script...")
     conn = get_db_connection()
+    start_time = time.time()
     try:
         csv_file = "backend/data/users.csv"
         credentials = load_credentials_to_db(conn, csv_file)
@@ -662,7 +708,9 @@ def fetch_historic_data():
                 plant_id_key = 'plant_id'
 
             try:
+                plants_start = time.time()
                 plants = fetch_plants(user_id, username, password)
+                logger.info(f"Fetched plants for {user_id} in {time.time() - plants_start:.2f}s")
                 if not plants:
                     logger.warning(f"No plants found for user {user_id}, skipping.")
                     log_error_to_db(customer_id, None, api_provider, "fetch_plants", user_id, "No plants found")
@@ -700,7 +748,9 @@ def fetch_historic_data():
 
                 plant_id = plant[plant_id_key]
                 try:
+                    devices_start = time.time()
                     devices = fetch_devices(user_id, username, password, plant_id)
+                    logger.info(f"Fetched devices for plant {plant_id} in {time.time() - devices_start:.2f}s")
                     if not devices:
                         logger.warning(f"No devices found for plant {plant_id}")
                         log_error_to_db(customer_id, None, api_provider, "fetch_devices", plant_id, "No devices found")
@@ -740,6 +790,7 @@ def fetch_historic_data():
                         continue
 
                     try:
+                        device_start = time.time()
                         @retry(
                             stop=stop_after_attempt(3),
                             wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -751,6 +802,7 @@ def fetch_historic_data():
                             return response
 
                         real_time_response = fetch_real_time_with_retry()
+                        logger.info(f"Fetched real-time data for {device_sn} in {time.time() - device_start:.2f}s")
                         if real_time_response:
                             logger.info(f"Received real-time data entries for device {device_sn}")
                             insert_data_to_db(conn, real_time_response, device_sn, customer_id, api_provider, is_real_time=True)
@@ -758,8 +810,8 @@ def fetch_historic_data():
                             logger.warning(f"No real-time data for device {device_sn}")
                             log_error_to_db(customer_id, device_sn, api_provider, "fetch_real_time", device_sn, "No real-time data")
 
-                        end_date = "2025-06-25"
-                        start_date = "2025-06-22"
+                        end_date = datetime.now().strftime('%Y-%m-%d')
+                        start_date = (datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d')
 
                         @retry(
                             stop=stop_after_attempt(3),
@@ -771,7 +823,9 @@ def fetch_historic_data():
                             logger.debug(f"Historical API response for device {device_sn}: {response}")
                             return response
 
+                        historical_start = time.time()
                         historical_data = fetch_historical_with_retry()
+                        logger.info(f"Fetched historical data for {device_sn} in {time.time() - historical_start:.2f}s")
                         if not historical_data:
                             logger.warning(f"No historical data for device {device_sn}")
                             log_error_to_db(customer_id, device_sn, api_provider, "fetch_historical", device_sn, "No historical data")
@@ -779,6 +833,9 @@ def fetch_historic_data():
                         flattened_historical_data = flatten_data(historical_data, api_provider)
                         logger.info(f"Received {len(flattened_historical_data)} historical data entries for device {device_sn}")
                         insert_data_to_db(conn, flattened_historical_data, device_sn, customer_id, api_provider, is_real_time=False)
+
+                        aggregate_daily_data(conn, device_sn, customer_id, api_provider)
+
                     except Exception as e:
                         logger.error(f"Failed to fetch or insert data for device {device_sn}: {e}")
                         log_error_to_db(customer_id, device_sn, api_provider, "fetch_data", device_sn, str(e))
@@ -786,9 +843,9 @@ def fetch_historic_data():
                         continue
 
         refresh_customer_metrics(conn)
-        logger.info("Completed fetch_historic_data script.")
+        logger.info(f"Completed fetch_historic_data script in {time.time() - start_time:.2f}s")
     except Exception as e:
-        logger.error(f"Error in fetch_historic_data: {e}")
+        logger.error(f"Error in fetch_historic_data: {e}", exc_info=True)
         log_error_to_db(None, None, None, "fetch_historic_data", None, str(e))
         conn.rollback()
         raise
