@@ -1,1 +1,1 @@
-list
+daily
