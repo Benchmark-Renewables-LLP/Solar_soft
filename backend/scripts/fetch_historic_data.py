@@ -583,15 +583,6 @@ def aggregate_daily_data(conn, device_sn, customer_id, api_provider):
         logger.info(f"Aggregating daily data for device {device_sn}")
         with conn.cursor() as cur:
             cur.execute("""
-                WITH ActiveHours AS (
-                    SELECT 
-                        device_sn,
-                        timestamp,
-                        total_power,
-                        EXTRACT(EPOCH FROM (LEAD(timestamp) OVER (PARTITION BY device_sn ORDER BY timestamp) - timestamp)) / 3600 AS time_diff_hours
-                    FROM device_data_historical
-                    WHERE device_sn = %s AND timestamp >= CURRENT_DATE - INTERVAL '1 day'
-                )
                 INSERT INTO device_data_daily (device_sn, date, total_energy, avg_power, max_voltage, min_voltage, active_hours)
                 SELECT 
                     device_sn,
@@ -600,7 +591,7 @@ def aggregate_daily_data(conn, device_sn, customer_id, api_provider):
                     AVG(total_power) AS avg_power,
                     MAX(GREATEST(r_voltage, s_voltage, t_voltage)) AS max_voltage,
                     LEAST(r_voltage, s_voltage, t_voltage) AS min_voltage,
-                    COALESCE(SUM(CASE WHEN total_power > 0 THEN time_diff_hours ELSE 0 END), 0) AS active_hours
+                    SUM(CASE WHEN total_power > 0 THEN EXTRACT(EPOCH FROM (LEAD(timestamp) OVER (PARTITION BY device_sn ORDER BY timestamp) - timestamp)) / 3600 ELSE 0 END) AS active_hours
                 FROM device_data_historical
                 WHERE device_sn = %s AND timestamp >= CURRENT_DATE - INTERVAL '1 day'
                 GROUP BY device_sn, DATE(timestamp)
@@ -611,7 +602,7 @@ def aggregate_daily_data(conn, device_sn, customer_id, api_provider):
                     min_voltage = EXCLUDED.min_voltage,
                     active_hours = EXCLUDED.active_hours,
                     created_at = NOW();
-            """, (device_sn, device_sn))  # Pass device_sn twice for CTE and main query
+            """, (device_sn,))
         conn.commit()
         logger.info(f"Aggregated daily data for device {device_sn}")
     except Exception as e:

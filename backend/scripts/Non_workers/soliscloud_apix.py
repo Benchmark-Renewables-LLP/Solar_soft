@@ -163,8 +163,8 @@ class SolisCloudAPI:
 if __name__ == "__main__":
     # Replace these values directly in the script
  
-    api_key = "1300386381677682509"  # Replace with your API ID
-    api_secret = "25af1c3d1343429783fb7bb437d342d3"
+    api_key = "1300386381677745367"  # Replace with your API ID
+    api_secret = "ba3f0b1cfdd64680b2bf91c13379b33a"
 
     client = SolisCloudAPI(api_key, api_secret)
     stations = client.get_all_stations()

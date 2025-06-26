@@ -213,8 +213,45 @@ class SolisCloudAPI:
             "r_current": float(data.get("iAc1", 0.0)),
             "s_current": float(data.get("iAc2", 0.0)),
             "t_current": float(data.get("iAc3", 0.0)),
+            "inverter_temperature": float(data.get("inverterTemperature", 0.0)),
+            "power_factor": float(data.get("powerFactor", 0.0)),
+            "frequency": float(data.get("fac", 0.0)),
+            "storage_battery_voltage": float(data.get("storageBatteryVoltage", 0.0)),
+            "storage_battery_current": float(data.get("storageBatteryCurrent", 0.0)),
+            "current_direction_battery": float(data.get("currentDirectionBattery", 0.0)),
+            "llc_bus_voltage": float(data.get("llcBusVoltage", 0.0)),
+            "dc_bus": float(data.get("dcBus", 0.0)),
+            "dc_bus_half": float(data.get("dcBusHalf", 0.0)),
+            "bypass_ac_voltage": float(data.get("bypassAcVoltage", 0.0)),
+            "bypass_ac_current": float(data.get("bypassAcCurrent", 0.0)),
+            "battery_capacity_soc": float(data.get("batteryCapacitySoc", 0.0)),
+            "battery_health_soh": float(data.get("batteryHealthSoh", 0.0)),
+            "battery_power": float(data.get("batteryPower", 0.0)),
+            "battery_voltage": float(data.get("batteryVoltage", 0.0)),
+            "battery_current": float(data.get("batteryCurrent", 0.0)),  # Corrected typo
+            "battery_charging_current": float(data.get("batteryChargingCurrent", 0.0)),
+            "battery_discharge_limiting": float(data.get("batteryDischargeLimiting", 0.0)),
+            "family_load_power": float(data.get("familyLoadPower", 0.0)),
+            "bypass_load_power": float(data.get("bypassLoadPower", 0.0)),
+            "battery_total_charge_energy": float(data.get("batteryTotalChargeEnergy", 0.0)),
+            "battery_today_charge_energy": float(data.get("batteryTodayChargeEnergy", 0.0)),
+            "battery_yesterday_charge_energy": float(data.get("batteryYesterdayChargeEnergy", 0.0)),
+            "battery_total_discharge_energy": float(data.get("batteryTotalDischargeEnergy", 0.0)),
+            "battery_today_discharge_energy": float(data.get("batteryTodayDischargeEnergy", 0.0)),
+            "battery_yesterday_discharge_energy": float(data.get("batteryYesterdayDischargeEnergy", 0.0)),
+            "grid_purchased_total_energy": float(data.get("gridPurchasedTotalEnergy", 0.0)),
+            "grid_purchased_today_energy": float(data.get("gridPurchasedTodayEnergy", 0.0)),
+            "grid_purchased_yesterday_energy": float(data.get("gridPurchasedYesterdayEnergy", 0.0)),
+            "grid_sell_total_energy": float(data.get("gridSellTotalEnergy", 0.0)),
+            "grid_sell_today_energy": float(data.get("gridSellTodayEnergy", 0.0)),
+            "grid_sell_yesterday_energy": float(data.get("gridSellYesterdayEnergy", 0.0)),
+            "home_load_total_energy": float(data.get("homeLoadTotalEnergy", 0.0)),
+            "home_load_today_energy": float(data.get("homeLoadTodayEnergy", 0.0)),
+            "home_load_yesterday_energy": float(data.get("homeLoadYesterdayEnergy", 0.0)),
+            "time_zone": float(data.get("timeZone", 5.5)),
+            "battery_type": str(data.get("batteryType", "Unknown"))
         }
-        for i in range(1, 13):
+        for i in range(1, 33):  # Extended to 32 PV inputs
             entry[f"pv{i:02d}_voltage"] = float(data.get(f"uPv{i}", 0.0))
             entry[f"pv{i:02d}_current"] = float(data.get(f"iPv{i}", 0.0))
 
@@ -271,8 +308,13 @@ class SolisCloudAPI:
                     logger.warning(f"No data for device {device['sn']} on {date_str}, page {page_no}")
                     break
 
-                data = response.get("data", {})
-                records = data.get("page", {}).get("records", [])
+                # Handle list or dictionary response
+                if isinstance(response.get("data"), list):
+                    records = response.get("data", [])  # Use data list directly
+                else:
+                    data = response.get("data", {})
+                    records = data if isinstance(data, list) else []  # Fallback to empty list if not a list
+
                 if not isinstance(records, list):
                     logger.error(f"Invalid records format for device {device['sn']} on {date_str}: {records}")
                     break
@@ -300,13 +342,50 @@ class SolisCloudAPI:
                         "r_current": float(record.get("iAc1", 0.0)),
                         "s_current": float(record.get("iAc2", 0.0)),
                         "t_current": float(record.get("iAc3", 0.0)),
+                        "inverter_temperature": float(record.get("inverterTemperature", 0.0)),
+                        "power_factor": float(record.get("powerFactor", 0.0)),
+                        "frequency": float(record.get("fac", 0.0)),
+                        "storage_battery_voltage": float(record.get("storageBatteryVoltage", 0.0)),
+                        "storage_battery_current": float(record.get("storageBatteryCurrent", 0.0)),
+                        "current_direction_battery": float(record.get("currentDirectionBattery", 0.0)),
+                        "llc_bus_voltage": float(record.get("llcBusVoltage", 0.0)),
+                        "dc_bus": float(record.get("dcBus", 0.0)),
+                        "dc_bus_half": float(record.get("dcBusHalf", 0.0)),
+                        "bypass_ac_voltage": float(record.get("bypassAcVoltage", 0.0)),
+                        "bypass_ac_current": float(record.get("bypassAcCurrent", 0.0)),
+                        "battery_capacity_soc": float(record.get("batteryCapacitySoc", 0.0)),
+                        "battery_health_soh": float(record.get("batteryHealthSoh", 0.0)),
+                        "battery_power": float(record.get("batteryPower", 0.0)),
+                        "battery_voltage": float(record.get("batteryVoltage", 0.0)),
+                        "battery_current": float(record.get("batteryCurrent", 0.0)),  # Corrected typo
+                        "battery_charging_current": float(record.get("batteryChargingCurrent", 0.0)),
+                        "battery_discharge_limiting": float(record.get("batteryDischargeLimiting", 0.0)),
+                        "family_load_power": float(record.get("familyLoadPower", 0.0)),
+                        "bypass_load_power": float(record.get("bypassLoadPower", 0.0)),
+                        "battery_total_charge_energy": float(record.get("batteryTotalChargeEnergy", 0.0)),
+                        "battery_today_charge_energy": float(record.get("batteryTodayChargeEnergy", 0.0)),
+                        "battery_yesterday_charge_energy": float(record.get("batteryYesterdayChargeEnergy", 0.0)),
+                        "battery_total_discharge_energy": float(record.get("batteryTotalDischargeEnergy", 0.0)),
+                        "battery_today_discharge_energy": float(record.get("batteryTodayDischargeEnergy", 0.0)),
+                        "battery_yesterday_discharge_energy": float(record.get("batteryYesterdayDischargeEnergy", 0.0)),
+                        "grid_purchased_total_energy": float(record.get("gridPurchasedTotalEnergy", 0.0)),
+                        "grid_purchased_today_energy": float(record.get("gridPurchasedTodayEnergy", 0.0)),
+                        "grid_purchased_yesterday_energy": float(record.get("gridPurchasedYesterdayEnergy", 0.0)),
+                        "grid_sell_total_energy": float(record.get("gridSellTotalEnergy", 0.0)),
+                        "grid_sell_today_energy": float(record.get("gridSellTodayEnergy", 0.0)),
+                        "grid_sell_yesterday_energy": float(record.get("gridSellYesterdayEnergy", 0.0)),
+                        "home_load_total_energy": float(record.get("homeLoadTotalEnergy", 0.0)),
+                        "home_load_today_energy": float(record.get("homeLoadTodayEnergy", 0.0)),
+                        "home_load_yesterday_energy": float(record.get("homeLoadYesterdayEnergy", 0.0)),
+                        "time_zone": float(record.get("timeZone", 5.5)),
+                        "battery_type": str(record.get("batteryType", "Unknown"))
                     }
-                    for i in range(1, 13):
+                    for i in range(1, 33):
                         entry[f"pv{i:02d}_voltage"] = float(record.get(f"uPv{i}", 0.0))
                         entry[f"pv{i:02d}_current"] = float(record.get(f"iPv{i}", 0.0))
                     historical_data.append(entry)
 
-                total_records = data.get("page", {}).get("total", 0)
+                total_records = len(records) if isinstance(response.get("data"), list) else data.get("page", {}).get("total", 0)
                 logger.info(f"Fetched {len(records)} records for device {device['sn']} on {date_str}, page {page_no}. Total: {total_records}")
                 if page_no * page_size >= total_records:
                     break
