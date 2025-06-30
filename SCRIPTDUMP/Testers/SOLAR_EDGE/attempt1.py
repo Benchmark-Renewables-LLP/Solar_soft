@@ -17,7 +17,7 @@ API_BASE_URL = "https://monitoringapi.solaredge.com"
 
 # Calculate date range for the past 6 months
 end_date = datetime.now().date()
-start_date = end_date - timedelta(days=15)  # 1 day ago
+start_date = end_date - timedelta(days=15)  # 15 days ago
 
 def check_site_validity():
     """Check if the site ID is valid and accessible with the API key."""
