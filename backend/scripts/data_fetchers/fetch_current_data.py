@@ -87,9 +87,17 @@ def insert_data_to_db(conn, data, device_sn, customer_id, api_provider, is_real_
             data_tuples = []
             for entry in flattened_data:
                 if not isinstance(entry, dict):
+                    logger.warning(f"Invalid data entry for device {device_sn}: {entry}")
                     continue
                 ts_str = entry.get('timestamp')
                 if not ts_str:
+                    logger.warning(f"Missing timestamp for device {device_sn}: {entry}")
+                    continue
+                try:
+                    # Validate timestamp format
+                    datetime.strptime(ts_str, '%Y-%m-%d %H:%M:%S')
+                except ValueError as e:
+                    logger.error(f"Invalid timestamp format for device {device_sn}: {ts_str}, error: {str(e)}")
                     continue
                 ts = datetime.strptime(ts_str, '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone('UTC'))
                 entry_timestamp = ts.strftime('%Y-%m-%d %H:%M:%S')

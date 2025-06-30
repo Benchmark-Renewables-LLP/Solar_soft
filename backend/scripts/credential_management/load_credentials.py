@@ -1,15 +1,21 @@
+import os
+import sys
+# Add backend to Python path (three levels up from data_fetchers to backend)
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 import logging
 import os
 import csv
+import re
 from datetime import datetime
 from psycopg2 import connect, OperationalError
 from config.settings import DATABASE_URL
 from pytz import timezone
+from logging import handlers  # Added import for handlers submodule
 
 logger = logging.getLogger(__name__)
 
 # Logging setup
-log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logs', 'current')
 os.makedirs(log_dir, exist_ok=True)
 log_date = datetime.now(timezone('Asia/Kolkata')).strftime('%Y%m%d')
 log_file = os.path.join(log_dir, f'load_credentials_{log_date}.log')

@@ -9,7 +9,7 @@ from psycopg2 import connect, OperationalError
 from psycopg2.extras import RealDictCursor
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from requests import exceptions as requests_exceptions
-from config.settings import DATABASE_URL,COMPANY_KEY
+from config.settings import DATABASE_URL, COMPANY_KEY
 from pytz import timezone
 import logging.handlers
 sys.path.append((os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -65,6 +65,32 @@ except Exception as e:
     print(f"Failed to configure logging: {str(e)}", file=sys.stderr)
     raise
 
+# Define validate_parameter function to fix the error
+def validate_parameter(value, field_name, min_val, max_val):
+    """Validate if a parameter value is within the specified range."""
+    try:
+        val = float(value)  # Convert value to float
+        if min_val <= val <= max_val:
+            return True, None  # Value is valid
+        else:
+            return False, f"{field_name}={val} out of range [{min_val}, {max_val}]"
+    except (ValueError, TypeError):
+        return False, f"Invalid {field_name}={value}"  # Handle non-numeric or invalid values
+def log_error_to_db(customer_id, device_sn, api_provider, field_name, field_value, error_message):
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO error_logs (
+                    customer_id, device_sn, timestamp, api_provider, field_name, field_value, error_message, created_at
+                )
+                VALUES (%s, %s, NOW(), %s, %s, %s, %s, NOW())
+            """, (customer_id, device_sn, api_provider, field_name, str(field_value), error_message))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"Failed to log error to error_logs: {e}")
+    finally:
+        conn.close()
 def get_db_connection():
     try:
         conn = connect(DATABASE_URL)

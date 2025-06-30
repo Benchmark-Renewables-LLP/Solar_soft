@@ -14,13 +14,11 @@ from typing import Any, List, Dict, Optional
 from pytz import timezone
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
-# Configure logging with date-based filename
 log_dir = "logs"
 os.makedirs(log_dir, exist_ok=True)
-log_date = datetime.now(timezone('Asia/Kolkata')).strftime('%Y%m%d')  # IST date
+log_date = datetime.now(timezone('Asia/Kolkata')).strftime('%Y%m%d')
 log_file = os.path.join(log_dir, f'soliscloud_api_{log_date}.log')
 
-# Verify file writability
 try:
     with open(log_file, 'a', encoding='utf-8') as f:
         f.write(f"Log file initialized at {datetime.now(timezone('Asia/Kolkata')).strftime('%Y-%m-%d %H:%M:%S IST')}\n")
@@ -46,8 +44,7 @@ class SolisCloudAPI:
         self.rate_limit_delay = rate_limit_delay
 
     def set_rate_limit_delay(self, delay: float):
-        """Adjust rate limit delay dynamically."""
-        self.rate_limit_delay = max(0.1, delay)  # Minimum 0.1s
+        self.rate_limit_delay = max(0.1, delay)
         logger.info(f"Rate limit delay set to {self.rate_limit_delay}s")
 
     def generate_signature(self, method: str, path: str, content_md5: str, content_type: str, date: str) -> str:
@@ -198,11 +195,9 @@ class SolisCloudAPI:
                 logger.error("Invalid device data and no station_id provided")
                 return []
 
-        
-
         try:
             start_date = datetime.now(timezone('Asia/Kolkata')).strftime('%Y-%m-%d')
-            end_date = start_date  # For current data, use today's date
+            end_date = start_date
             start = datetime.strptime(start_date, '%Y-%m-%d').replace(tzinfo=timezone('UTC'))
             end = datetime.strptime(end_date, '%Y-%m-%d').replace(hour=23, minute=59, second=59, tzinfo=timezone('UTC'))
         except ValueError as e:
@@ -227,6 +222,7 @@ class SolisCloudAPI:
                     "time": date_str,
                     "timeZone": time_zone,
                     "pageNo": page_no,
+                    "money": "INR",
                     "pageSize": page_size
                 }
                 response = self.make_request("POST", "inverterDay", params)
@@ -234,12 +230,11 @@ class SolisCloudAPI:
                     logger.warning(f"No data for device {device['sn']} on {date_str}, page {page_no}")
                     break
 
-                # Handle list or dictionary response
                 if isinstance(response.get("data"), list):
-                    records = response.get("data", [])  # Use data list directly
+                    records = response.get("data", [])
                 else:
                     data = response.get("data", {})
-                    records = data if isinstance(data, list) else []  # Fallback to empty list if not a list
+                    records = data if isinstance(data, list) else []
 
                 if not isinstance(records, list):
                     logger.error(f"Invalid records format for device {device['sn']} on {date_str}: {records}")
@@ -283,7 +278,7 @@ class SolisCloudAPI:
                         "battery_health_soh": float(record.get("batteryHealthSoh", 0.0)),
                         "battery_power": float(record.get("batteryPower", 0.0)),
                         "battery_voltage": float(record.get("batteryVoltage", 0.0)),
-                        "battery_current": float(record.get("batteryCurrent", 0.0)),  # Corrected typo
+                        "battery_current": float(record.get("batteryCurrent", 0.0)),
                         "battery_charging_current": float(record.get("batteryChargingCurrent", 0.0)),
                         "battery_discharge_limiting": float(record.get("batteryDischargeLimiting", 0.0)),
                         "family_load_power": float(record.get("familyLoadPower", 0.0)),
@@ -366,7 +361,7 @@ class SolisCloudAPI:
             "battery_health_soh": float(data.get("batteryHealthSoh", 0.0)),
             "battery_power": float(data.get("batteryPower", 0.0)),
             "battery_voltage": float(data.get("batteryVoltage", 0.0)),
-            "battery_current": float(data.get("batteryCurrent", 0.0)),  # Corrected typo
+            "battery_current": float(data.get("batteryCurrent", 0.0)),
             "battery_charging_current": float(data.get("batteryChargingCurrent", 0.0)),
             "battery_discharge_limiting": float(data.get("batteryDischargeLimiting", 0.0)),
             "family_load_power": float(data.get("familyLoadPower", 0.0)),
@@ -389,7 +384,7 @@ class SolisCloudAPI:
             "time_zone": float(data.get("timeZone", 5.5)),
             "battery_type": str(data.get("batteryType", "Unknown"))
         }
-        for i in range(1, 33):  # Extended to 32 PV inputs
+        for i in range(1, 33):
             entry[f"pv{i:02d}_voltage"] = float(data.get(f"uPv{i}", 0.0))
             entry[f"pv{i:02d}_current"] = float(data.get(f"iPv{i}", 0.0))
 
@@ -437,7 +432,7 @@ class SolisCloudAPI:
                     "id": device["id"],
                     "sn": device["sn"],
                     "time": date_str,
-                    "timeZone": time_zone,
+                    "timeZone": str(time_zone),
                     "pageNo": page_no,
                     "pageSize": page_size
                 }
@@ -446,12 +441,11 @@ class SolisCloudAPI:
                     logger.warning(f"No data for device {device['sn']} on {date_str}, page {page_no}")
                     break
 
-                # Handle list or dictionary response
                 if isinstance(response.get("data"), list):
-                    records = response.get("data", [])  # Use data list directly
+                    records = response.get("data", [])
                 else:
                     data = response.get("data", {})
-                    records = data if isinstance(data, list) else []  # Fallback to empty list if not a list
+                    records = data.get("page", {}).get("records", []) if data.get("page") else []
 
                 if not isinstance(records, list):
                     logger.error(f"Invalid records format for device {device['sn']} on {date_str}: {records}")
@@ -495,7 +489,7 @@ class SolisCloudAPI:
                         "battery_health_soh": float(record.get("batteryHealthSoh", 0.0)),
                         "battery_power": float(record.get("batteryPower", 0.0)),
                         "battery_voltage": float(record.get("batteryVoltage", 0.0)),
-                        "battery_current": float(record.get("batteryCurrent", 0.0)),  # Corrected typo
+                        "battery_current": float(record.get("batteryCurrent", 0.0)),
                         "battery_charging_current": float(record.get("batteryChargingCurrent", 0.0)),
                         "battery_discharge_limiting": float(record.get("batteryDischargeLimiting", 0.0)),
                         "family_load_power": float(record.get("familyLoadPower", 0.0)),

@@ -140,96 +140,92 @@ class SolarmanAPI:
             logger.error(f"Invalid date format for Solarman: {str(e)}")
             raise
 
+        payload = {
+            "deviceSn": device.get("deviceSn", ""),
+            "deviceType": device.get("deviceType", "INVERTER"),
+            "startTime": start_dt.strftime('%Y-%m-%d'),
+            "endTime": end_dt.strftime('%Y-%m-%d'),
+            "timeType": 1  # Assuming 1 is for daily data; adjust if needed per API docs
+        }
         normalized_data = []
-        current_dt = start_dt
-        while current_dt <= end_dt:
-            payload = {
-                "deviceSn": device.get("deviceSn", ""),
-                "deviceType": device.get("deviceType", "INVERTER"),
-                "startTime": current_dt.strftime('%Y-%m-%d'),
-                "endTime": current_dt.strftime('%Y-%m-%d'),
-                "timeType": 1
-            }
-            try:
-                response = self._make_request("POST", endpoint, data=payload)
-                time.sleep(1)  # Rate limit
-                param_data_list = response.get("paramDataList", [])
-                logger.debug(f"Raw paramDataList for {device.get('deviceSn')} on {current_dt.strftime('%Y-%m-%d')}: {param_data_list}")
-                for param_data in param_data_list:
-                    collect_time = param_data.get("collectTime")
-                    if isinstance(collect_time, (int, float)):
-                        collect_time_dt = datetime.fromtimestamp(collect_time / 1000 if len(str(int(collect_time))) > 10 else collect_time, tz=tz.tzutc())
-                        if now - collect_time_dt < timedelta(minutes=5):
-                            logger.debug(f"Skipping recent timestamp for device {device.get('deviceSn')}: {collect_time}")
-                            continue
-                        collect_time = collect_time_dt.strftime('%Y-%m-%d %H:%M:%S')
-                    data_list = param_data.get("dataList", [])
-                    if not data_list:
-                        logger.warning(f"Skipping empty data entry for device {device.get('deviceSn')} at timestamp {collect_time}")
+        try:
+            response = self._make_request("POST", endpoint, data=payload)
+            param_data_list = response.get("paramDataList", [])
+            logger.debug(f"Raw paramDataList for {device.get('deviceSn')}: {param_data_list}")
+            for param_data in param_data_list:
+                collect_time = param_data.get("collectTime")
+                if isinstance(collect_time, (int, float)):
+                    collect_time_dt = datetime.fromtimestamp(collect_time / 1000 if len(str(int(collect_time))) > 10 else collect_time, tz=tz.tzutc())
+                    if now - collect_time_dt < timedelta(minutes=5):
+                        logger.debug(f"Skipping recent timestamp for device {device.get('deviceSn')}: {collect_time}")
                         continue
-                    entry = {"timestamp": collect_time}
-                    for item in data_list:
-                        key = item.get("key", "").lower()
-                        value = item.get("value")
-                        if key in ['dc1', 'dc2', 'dc3', 'dc4', 'dc5', 'dc6', 'dc7', 'dc8', 'dc9', 'dc10', 'dc11', 'dc12', 'dc13', 'dc14', 'dc15', 'dc16']:
-                            pv_index = int(key.replace('dc', '')) if key.startswith('dc') else None
-                            if pv_index:
-                                entry[f'pv{pv_index:02d}_current'] = value
-                        elif key in ['dv1', 'dv2', 'dv3', 'dv4', 'dv5', 'dv6', 'dv7', 'dv8', 'dv9', 'dv10', 'dv11', 'dv12', 'dv13', 'dv14', 'dv15', 'dv16']:
-                            pv_index = int(key.replace('dv', '')) if key.startswith('dv') else None
-                            if pv_index:
-                                entry[f'pv{pv_index:02d}_voltage'] = value
-                        elif key in ['av1', 'av2', 'av3']:
-                            phase = {'av1': 'r', 'av2': 's', 'av3': 't'}.get(key)
-                            if phase:
-                                entry[f'{phase}_voltage'] = value
-                        elif key in ['ac1', 'ac2', 'ac3']:
-                            phase = {'ac1': 'r', 'ac2': 's', 'ac3': 't'}.get(key)
-                            if phase:
-                                entry[f'{phase}_current'] = value
-                        elif key == 'tpg':
-                            entry['total_power'] = value
-                        elif key == 'etdy_ge1':
-                            entry['energy_today'] = value
-                        elif key == 'a_fo1':
-                            entry['frequency'] = value
-                        elif key == 'inv_st1':
-                            entry['state'] = value
-                        elif key == 'dpi_t1':
-                            entry['total_dc_input_power'] = value
-                        elif key in ['pv1_voltage', 'pv2_voltage', 'pv3_voltage', 'pv4_voltage', 'pv5_voltage', 'pv6_voltage', 'pv7_voltage', 'pv8_voltage', 'pv9_voltage', 'pv10_voltage', 'pv11_voltage', 'pv12_voltage']:
-                            entry[key.replace('pv1_', 'pv01_').replace('pv2_', 'pv02_').replace('pv3_', 'pv03_').replace('pv4_', 'pv04_').replace('pv5_', 'pv05_').replace('pv6_', 'pv06_').replace('pv7_', 'pv07_').replace('pv8_', 'pv08_').replace('pv9_', 'pv09_')] = value
-                        elif key in ['pv1_current', 'pv2_current', 'pv3_current', 'pv4_current', 'pv5_current', 'pv6_current', 'pv7_current', 'pv8_current', 'pv9_current', 'pv10_current', 'pv11_current', 'pv12_current']:
-                            entry[key.replace('pv1_', 'pv01_').replace('pv2_', 'pv02_').replace('pv3_', 'pv03_').replace('pv4_', 'pv04_').replace('pv5_', 'pv05_').replace('pv6_', 'pv06_').replace('pv7_', 'pv07_').replace('pv8_', 'pv08_').replace('pv9_', 'pv09_')] = value
-                        elif key in ['r_voltage', 's_voltage', 't_voltage', 'r_current', 's_current', 't_current', 'rs_voltage', 'st_voltage', 'tr_voltage']:
-                            entry[key] = value
-                        elif key == 'frequency':
-                            entry['frequency'] = value
-                        elif key in ['total_power', 'power']:
-                            entry['total_power'] = value
-                        elif key in ['reactive_power']:
-                            entry['reactive_power'] = value
-                        elif key in ['energy_today', 'etdy_ge1']:
-                            entry['energy_today'] = value
-                        elif key in ['pr']:
-                            entry['pr'] = value
-                        elif key in ['state', 'status', 'inv_st1']:
-                            entry['state'] = value
-                    if len(entry) > 1:
-                        normalized_data.append(entry)
-                    else:
-                        logger.warning(f"Skipping empty data entry for device {device.get('deviceSn')} at timestamp {collect_time}")
-            except Exception as e:
-                logger.error(f"Error fetching Solarman historical data for {device.get('deviceSn')} on {current_dt.strftime('%Y-%m-%d')}: {str(e)}")
-                continue
-            current_dt += timedelta(days=1)
+                    collect_time = collect_time_dt.strftime('%Y-%m-%d %H:%M:%S')
+                data_list = param_data.get("dataList", [])
+                if not data_list:
+                    logger.warning(f"Skipping empty data entry for device {device.get('deviceSn')} at timestamp {collect_time}")
+                    continue
+                entry = {"timestamp": collect_time}
+                for item in data_list:
+                    key = item.get("key", "").lower()
+                    value = item.get("value")
+                    if key in ['dc1', 'dc2', 'dc3', 'dc4', 'dc5', 'dc6', 'dc7', 'dc8', 'dc9', 'dc10', 'dc11', 'dc12', 'dc13', 'dc14', 'dc15', 'dc16']:
+                        pv_index = int(key.replace('dc', '')) if key.startswith('dc') else None
+                        if pv_index:
+                            entry[f'pv{pv_index:02d}_current'] = value
+                    elif key in ['dv1', 'dv2', 'dv3', 'dv4', 'dv5', 'dv6', 'dv7', 'dv8', 'dv9', 'dv10', 'dv11', 'dv12', 'dv13', 'dv14', 'dv15', 'dv16']:
+                        pv_index = int(key.replace('dv', '')) if key.startswith('dv') else None
+                        if pv_index:
+                            entry[f'pv{pv_index:02d}_voltage'] = value
+                    elif key in ['av1', 'av2', 'av3']:
+                        phase = {'av1': 'r', 'av2': 's', 'av3': 't'}.get(key)
+                        if phase:
+                            entry[f'{phase}_voltage'] = value
+                    elif key in ['ac1', 'ac2', 'ac3']:
+                        phase = {'ac1': 'r', 'ac2': 's', 'ac3': 't'}.get(key)
+                        if phase:
+                            entry[f'{phase}_current'] = value
+                    elif key == 'tpg':
+                        entry['total_power'] = value
+                    elif key == 'etdy_ge1':
+                        entry['energy_today'] = value
+                    elif key == 'a_fo1':
+                        entry['frequency'] = value
+                    elif key == 'inv_st1':
+                        entry['state'] = value
+                    elif key == 'dpi_t1':
+                        entry['total_dc_input_power'] = value
+                    elif key in ['pv1_voltage', 'pv2_voltage', 'pv3_voltage', 'pv4_voltage', 'pv5_voltage', 'pv6_voltage', 'pv7_voltage', 'pv8_voltage', 'pv9_voltage', 'pv10_voltage', 'pv11_voltage', 'pv12_voltage']:
+                        entry[key.replace('pv1_', 'pv01_').replace('pv2_', 'pv02_').replace('pv3_', 'pv03_').replace('pv4_', 'pv04_').replace('pv5_', 'pv05_').replace('pv6_', 'pv06_').replace('pv7_', 'pv07_').replace('pv8_', 'pv08_').replace('pv9_', 'pv09_')] = value
+                    elif key in ['pv1_current', 'pv2_current', 'pv3_current', 'pv4_current', 'pv5_current', 'pv6_current', 'pv7_current', 'pv8_current', 'pv9_current', 'pv10_current', 'pv11_current', 'pv12_current']:
+                        entry[key.replace('pv1_', 'pv01_').replace('pv2_', 'pv02_').replace('pv3_', 'pv03_').replace('pv4_', 'pv04_').replace('pv5_', 'pv05_').replace('pv6_', 'pv06_').replace('pv7_', 'pv07_').replace('pv8_', 'pv08_').replace('pv9_', 'pv09_')] = value
+                    elif key in ['r_voltage', 's_voltage', 't_voltage', 'r_current', 's_current', 't_current', 'rs_voltage', 'st_voltage', 'tr_voltage']:
+                        entry[key] = value
+                    elif key == 'frequency':
+                        entry['frequency'] = value
+                    elif key in ['total_power', 'power']:
+                        entry['total_power'] = value
+                    elif key in ['reactive_power']:
+                        entry['reactive_power'] = value
+                    elif key in ['energy_today', 'etdy_ge1']:
+                        entry['energy_today'] = value
+                    elif key in ['pr']:
+                        entry['pr'] = value
+                    elif key in ['state', 'status', 'inv_st1']:
+                        entry['state'] = value
+                if len(entry) > 1:
+                    normalized_data.append(entry)
+                else:
+                    logger.warning(f"Skipping empty data entry for device {device.get('deviceSn')} at timestamp {collect_time}")
+        except Exception as e:
+            logger.error(f"Error fetching Solarman historical data for {device.get('deviceSn')}: {str(e)}")
+            raise
         return normalized_data
 
     def get_current_day_data(self, user_id: str, username: str, password: str, device: Dict) -> List[Dict]:
         endpoint = "/device/v1.0/historical?language=en"
         try:
             end_date = datetime.now().strftime('%Y-%m-%d')
-            start_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+            start_date = datetime.now().strftime('%Y-%m-%d')
             start_dt = datetime.strptime(start_date, '%Y-%m-%d').replace(tzinfo=tz.tzutc())
             end_dt = datetime.strptime(end_date, '%Y-%m-%d').replace(hour=23, minute=59, second=59, tzinfo=tz.tzutc())
             now = datetime.now(tz.tzutc())
@@ -255,15 +251,43 @@ class SolarmanAPI:
                 response = self._make_request("POST", endpoint, data=payload)
                 time.sleep(1)  # Rate limit
                 param_data_list = response.get("paramDataList", [])
-                logger.debug(f"Raw paramDataList for {device.get('deviceSn')} on {current_dt.strftime('%Y-%m-%d')}: {param_data_list}")
+                logger.debug(f"Raw paramDataList for {device.get('deviceSn')} on {current_dt.strftime('%Y-%m-%d')}: {json.dumps(param_data_list, indent=2, ensure_ascii=False)}")
                 for param_data in param_data_list:
                     collect_time = param_data.get("collectTime")
+                    if not collect_time:
+                        logger.warning(f"Missing collectTime for device {device.get('deviceSn')}")
+                        continue
                     if isinstance(collect_time, (int, float)):
-                        collect_time_dt = datetime.fromtimestamp(collect_time / 1000 if len(str(int(collect_time))) > 10 else collect_time, tz=tz.tzutc())
-                        if now - collect_time_dt < timedelta(minutes=5):
-                            logger.debug(f"Skipping recent timestamp for device {device.get('deviceSn')}: {collect_time}")
+                        try:
+                            timestamp = collect_time / 1000 if len(str(int(collect_time))) > 10 else collect_time
+                            collect_time_dt = datetime.fromtimestamp(timestamp, tz=tz.tzutc())
+                            if now - collect_time_dt < timedelta(minutes=5):
+                                logger.debug(f"Skipping recent timestamp for device {device.get('deviceSn')}: {collect_time}")
+                                continue
+                            collect_time = collect_time_dt.strftime('%Y-%m-%d %H:%M:%S')
+                        except (ValueError, TypeError) as e:
+                            logger.error(f"Invalid collectTime number format for device {device.get('deviceSn')}: {collect_time}, error: {str(e)}")
                             continue
-                        collect_time = collect_time_dt.strftime('%Y-%m-%d %H:%M:%S')
+                    elif isinstance(collect_time, str):
+                        try:
+                            collect_time_dt = datetime.strptime(collect_time, '%Y-%m-%d %H:%M:%S')
+                            collect_time = collect_time_dt.strftime('%Y-%m-%d %H:%M:%S')
+                        except ValueError:
+                            try:
+                                timestamp = float(collect_time)
+                                timestamp = timestamp / 1000 if len(str(int(timestamp))) > 10 else timestamp
+                                collect_time_dt = datetime.fromtimestamp(timestamp, tz=tz.tzutc())
+                                if now - collect_time_dt < timedelta(minutes=5):
+                                    logger.debug(f"Skipping recent timestamp for device {device.get('deviceSn')}: {collect_time}")
+                                    continue
+                                collect_time = collect_time_dt.strftime('%Y-%m-%d %H:%M:%S')
+                            except (ValueError, TypeError) as e:
+                                logger.error(f"Invalid string collectTime format for device {device.get('deviceSn')}: {collect_time}, error: {str(e)}")
+                                continue
+                    else:
+                        logger.error(f"Unexpected collectTime type for device {device.get('deviceSn')}: {type(collect_time)}")
+                        continue
+
                     data_list = param_data.get("dataList", [])
                     if not data_list:
                         logger.warning(f"Skipping empty data entry for device {device.get('deviceSn')} at timestamp {collect_time}")
@@ -325,9 +349,8 @@ class SolarmanAPI:
                 continue
             current_dt += timedelta(days=1)
         return normalized_data
-
     
-    def get_current_data(self, user_id: str, username: str, password: str, device: Dict) -> List[Dict]:
+    def get_realtime_data(self, user_id: str, username: str, password: str, device: Dict) -> List[Dict]:
         endpoint = "/device/v1.0/currentData"
         params = {"language": "en"}
         payload = {"deviceSn": device.get("deviceSn", "")}
