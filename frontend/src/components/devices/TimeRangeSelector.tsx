@@ -1,7 +1,8 @@
 
 import React from 'react';
 import { Button } from '@/components/ui/button';
-import { TimeRange } from './DeviceDetail';
+
+export type TimeRange = '1h' | '24h' | '7d' | '30d';
 
 interface TimeRangeSelectorProps {
   selectedRange: TimeRange;

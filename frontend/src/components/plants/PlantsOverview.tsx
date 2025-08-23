@@ -1,8 +1,12 @@
-import React from 'react';
-import { Factory, MapPin, Zap, Users, Settings, Eye } from 'lucide-react';
+
+import React, { useState, useEffect } from 'react';
+import { Factory, MapPin, Zap, Users, Settings, Eye, HelpCircle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { usePlantsData } from '@/hooks/usePlantsData';
+import UserGuide from '@/components/onboarding/UserGuide';
+import { LiveDataPanel } from '@/components/dashboard/LiveDataPanel';
+import { Device } from '@/types/device';
 
 export interface Plant {
   id: string;
@@ -13,17 +17,6 @@ export interface Plant {
   efficiency: number;
   deviceCount: number;
   status: 'online' | 'offline' | 'maintenance';
-  lastUpdate: Date;
-}
-
-export interface Device {
-  id: string;
-  plantId: string;
-  name: string;
-  type: 'inverter' | 'panel' | 'meter';
-  status: 'online' | 'offline' | 'warning' | 'fault';
-  currentOutput: number;
-  efficiency: number;
   lastUpdate: Date;
 }
 
@@ -57,7 +50,27 @@ const getStatusColor = (status: string) => {
 };
 
 export const PlantsOverview: React.FC<PlantsOverviewProps> = ({ user, onDeviceSelect, onLogout }) => {
-  const { plants, devices, isLoading, error } = usePlantsData();
+  // Updated user type detection - check for demo username or demo123
+  const userType = (user?.username === 'admin') ? 'admin' : 'demo';
+  const { plants, devices, isLoading, error } = usePlantsData(userType);
+  const [showGuide, setShowGuide] = useState(false);
+
+  // Show guide for demo user on first visit
+  useEffect(() => {
+    if (userType === 'demo') {
+      const hasSeenGuide = localStorage.getItem('demo-guide-seen');
+      if (!hasSeenGuide) {
+        setShowGuide(true);
+      }
+    }
+  }, [userType]);
+
+  const handleCloseGuide = () => {
+    setShowGuide(false);
+    if (userType === 'demo') {
+      localStorage.setItem('demo-guide-seen', 'true');
+    }
+  };
 
   if (isLoading) {
     return (
@@ -82,9 +95,9 @@ export const PlantsOverview: React.FC<PlantsOverviewProps> = ({ user, onDeviceSe
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-emerald-50">
+    <div className="min-h-screen gradient-mesh">
       {/* Header */}
-      <div className="bg-white/80 backdrop-blur-sm border-b border-slate-200 sticky top-0 z-40">
+      <div className="glass-intense border-b sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
@@ -95,23 +108,40 @@ export const PlantsOverview: React.FC<PlantsOverviewProps> = ({ user, onDeviceSe
                 <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-cyan-600 bg-clip-text text-transparent">
                   Plants & Devices
                 </h1>
-                <p className="text-slate-600">Welcome back, {user.name}</p>
+                <p className="text-slate-600">Welcome back, {user.name || user.fullname || user.username}</p>
               </div>
             </div>
-            <Button onClick={onLogout} variant="outline">
-              Logout
-            </Button>
+            <div className="flex items-center space-x-2">
+              <Button
+                onClick={() => setShowGuide(true)}
+                variant="outline"
+                size="sm"
+                className="flex items-center space-x-2"
+              >
+                <HelpCircle className="w-4 h-4" />
+                <span>Guide</span>
+              </Button>
+              <Button onClick={onLogout} variant="outline">
+                Logout
+              </Button>
+            </div>
           </div>
         </div>
       </div>
 
       <div className="max-w-7xl mx-auto px-6 py-8">
+        {/* Live Data Panel */}
+        <LiveDataPanel />
+        
         {/* Plants Overview */}
         <div className="mb-8">
-          <h2 className="text-2xl font-bold text-slate-800 mb-6">Solar Plants Overview</h2>
+          <h2 className="text-2xl font-bold text-slate-800 mb-6">
+            Solar Plants Overview 
+            {userType === 'demo' && <span className="text-sm text-slate-500 ml-2">(Demo View - Limited Data)</span>}
+          </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {plants.map((plant) => (
-              <Card key={plant.id} className={`${getStatusBg(plant.status)} hover:shadow-lg transition-shadow`}>
+              <Card key={plant.id} className="glass-card hover:glass-intense transition-all duration-300">
                 <CardHeader>
                   <CardTitle className="flex items-center justify-between">
                     <span className="text-lg">{plant.name}</span>
@@ -152,12 +182,15 @@ export const PlantsOverview: React.FC<PlantsOverviewProps> = ({ user, onDeviceSe
 
         {/* Devices List */}
         <div>
-          <h2 className="text-2xl font-bold text-slate-800 mb-6">Devices</h2>
+          <h2 className="text-2xl font-bold text-slate-800 mb-6">
+            Devices
+            {userType === 'demo' && <span className="text-sm text-slate-500 ml-2">(Showing {devices.length} devices)</span>}
+          </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {devices.map((device) => {
               const plant = plants.find(p => p.id === device.plantId);
               return (
-                <Card key={device.id} className={`${getStatusBg(device.status)} hover:shadow-lg transition-all hover:scale-105 cursor-pointer`}>
+                <Card key={device.id} className="glass-card hover:glass-intense transition-all duration-300 hover:scale-105 cursor-pointer">
                   <CardContent className="p-4">
                     <div className="flex items-center justify-between mb-3">
                       <h3 className="font-semibold text-slate-800">{device.name}</h3>
@@ -196,6 +229,8 @@ export const PlantsOverview: React.FC<PlantsOverviewProps> = ({ user, onDeviceSe
           </div>
         </div>
       </div>
+
+      <UserGuide isOpen={showGuide} onClose={handleCloseGuide} />
     </div>
   );
 };

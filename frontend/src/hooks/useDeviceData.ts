@@ -1,7 +1,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/services/api';
-import { TimeRange } from '@/components/devices/DeviceDetail';
+import { TimeRange } from '@/types/device';
 
 export const useDeviceTimeSeriesData = (deviceId: string, timeRange: TimeRange) => {
   const metrics = ['panel_voltages', 'input_currents', 'output_currents', 'power_generation'];

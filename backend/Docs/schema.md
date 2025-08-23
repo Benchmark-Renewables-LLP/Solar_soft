@@ -1,6 +1,0 @@
-For Plants:
-
-- id: TEXT PRIMARY KEY
-- name: TEXT NOT NULL
-- capacity: FLOAT
-- created_at: TIMESTAMP DEFAULT CURRENT_TIMESTAMP

@@ -1,81 +1,91 @@
+
 import React, { useState } from 'react';
 import { LoginForm } from '@/components/auth/LoginForm';
 import { RegisterForm } from '@/components/auth/RegisterForm';
-import { PlantsOverview, Device } from '@/components/plants/PlantsOverview';
+import { PlantsOverview } from '@/components/plants/PlantsOverview';
 import { DeviceDetail } from '@/components/devices/DeviceDetail';
+import { DashboardLayout } from '@/components/layout/DashboardLayout';
+import UserGuide from '@/components/onboarding/UserGuide';
 import { toast } from 'sonner';
 import { apiClient } from '@/services/api';
+import { useAuth } from '@/contexts/AuthContext';
+import { Device } from '@/types/device';
 
 type ViewState = 'login' | 'register' | 'plants' | 'device';
 
-interface User {
-  id: string;
-  name: string;
-  email: string;
-}
-
 const Dashboard = () => {
+  const { user, isAuthenticated, login, logout, isLoading } = useAuth();
   const [currentView, setCurrentView] = useState<ViewState>('login');
   const [isLogin, setIsLogin] = useState(true);
-  const [user, setUser] = useState<User | null>(null);
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
+  const [showUserGuide, setShowUserGuide] = useState(false);
 
-  const handleLogin = async (email: string, password: string) => {
+  // Auto-navigate to plants if user is authenticated
+  React.useEffect(() => {
+    if (isAuthenticated && user) {
+      setCurrentView('plants');
+      // Show user guide on first login
+      const hasSeenGuide = localStorage.getItem('hasSeenGuide');
+      if (!hasSeenGuide) {
+        setShowUserGuide(true);
+        localStorage.setItem('hasSeenGuide', 'true');
+      }
+    } else if (!isLoading) {
+      setCurrentView('login');
+    }
+  }, [isAuthenticated, user, isLoading]);
+
+  const handleLogin = async (username: string, password: string) => {
     try {
       // HARDCODED DEMO CREDENTIALS - Remove in production
-      if (email === 'demo@solar.com' && password === 'demo123') {
+      if (username === 'demo' && password === 'demo123') {
         console.log('Demo login successful');
-        setUser({
+        const demoUser = {
           id: 'demo-user-1',
-          name: 'Demo User',
-          email: 'demo@solar.com'
-        });
+          username: 'demo',
+          fullname: 'Demo User'
+        };
+        login(demoUser, 'demo-token');
         setCurrentView('plants');
         toast.success('Welcome to the Solar PV Dashboard demo!');
         return;
       }
 
       // HARDCODED ADMIN CREDENTIALS - Remove in production
-      if (email === 'admin@solar.com' && password === 'admin123') {
+      if (username === 'admin' && password === 'admin123') {
         console.log('Admin login successful');
-        setUser({
+        const adminUser = {
           id: 'admin-user-1',
-          name: 'Admin User',
-          email: 'admin@solar.com'
-        });
+          username: 'admin',
+          fullname: 'Admin User'
+        };
+        login(adminUser, 'admin-token');
         setCurrentView('plants');
         toast.success('Welcome Admin! Full access granted.');
         return;
       }
 
-      console.log('Login attempt:', email);
-      const response = await apiClient.login({ email, password });
+      console.log('Login attempt with API:', username);
+      const response = await apiClient.login({ username, password, isInstaller: false });
       
-      setUser({
-        id: response.user.id,
-        name: response.user.name,
-        email: response.user.email
-      });
+      login(response.user, response.token);
       setCurrentView('plants');
-      toast.success(`Welcome back, ${response.user.name}!`);
+      toast.success(`Welcome back, ${response.user.fullname}!`);
     } catch (error) {
-      console.error('Login failed:', error);
-      toast.error('Login failed. Please try demo credentials: demo@solar.com / demo123 or admin@solar.com / admin123');
+      console.error('Login failed - throwing error for funky message:', error);
+      // This error will be caught by LoginForm and show the funky message
+      throw error;
     }
   };
 
-  const handleRegister = async (name: string, email: string, password: string) => {
+  const handleRegister = async (userData: { username: string; fullname: string; password: string; confirmPassword: string; isInstaller: boolean }) => {
     try {
-      console.log('Register attempt:', name, email);
-      const response = await apiClient.register({ name, email, password });
+      console.log('Register attempt:', userData.fullname, userData.username);
+      const response = await apiClient.register(userData);
       
-      setUser({
-        id: response.user.id,
-        name: response.user.name,
-        email: response.user.email
-      });
+      login(response.user, response.token);
       setCurrentView('plants');
-      toast.success(`Welcome, ${response.user.name}! Account created successfully.`);
+      toast.success(`Welcome, ${response.user.fullname}! Account created successfully.`);
     } catch (error) {
       console.error('Registration failed:', error);
       toast.error('Registration failed. Please try again.');
@@ -85,7 +95,7 @@ const Dashboard = () => {
   const handleLogout = async () => {
     try {
       await apiClient.logout();
-      setUser(null);
+      logout();
       setSelectedDevice(null);
       setCurrentView('login');
       setIsLogin(true);
@@ -93,7 +103,7 @@ const Dashboard = () => {
     } catch (error) {
       console.error('Logout error:', error);
       // Still log out locally even if API call fails
-      setUser(null);
+      logout();
       setSelectedDevice(null);
       setCurrentView('login');
       setIsLogin(true);
@@ -115,6 +125,21 @@ const Dashboard = () => {
     setCurrentView(isLogin ? 'register' : 'login');
   };
 
+  const handleCloseUserGuide = () => {
+    setShowUserGuide(false);
+  };
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-emerald-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
+          <p className="text-slate-600">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
   // Render based on current view state
   if (currentView === 'login') {
     return (
@@ -128,7 +153,6 @@ const Dashboard = () => {
   if (currentView === 'register') {
     return (
       <RegisterForm 
-        onRegister={handleRegister} 
         onToggleAuth={toggleAuthMode}
       />
     );
@@ -136,20 +160,32 @@ const Dashboard = () => {
 
   if (currentView === 'plants' && user) {
     return (
-      <PlantsOverview 
-        user={user}
-        onDeviceSelect={handleDeviceSelect}
-        onLogout={handleLogout}
-      />
+      <DashboardLayout onLogout={handleLogout}>
+        <PlantsOverview 
+          user={user}
+          onDeviceSelect={handleDeviceSelect}
+          onLogout={handleLogout}
+        />
+        <UserGuide 
+          isOpen={showUserGuide} 
+          onClose={handleCloseUserGuide} 
+        />
+      </DashboardLayout>
     );
   }
 
   if (currentView === 'device' && selectedDevice) {
     return (
-      <DeviceDetail 
-        device={selectedDevice}
-        onBack={handleBackToPlants}
-      />
+      <DashboardLayout onLogout={handleLogout}>
+        <DeviceDetail 
+          device={selectedDevice}
+          onBack={handleBackToPlants}
+        />
+        <UserGuide 
+          isOpen={showUserGuide} 
+          onClose={handleCloseUserGuide} 
+        />
+      </DashboardLayout>
     );
   }
 

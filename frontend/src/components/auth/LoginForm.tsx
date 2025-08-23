@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { User, Lock, Eye, EyeOff, Building, AlertTriangle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -30,29 +31,34 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLogin, onToggleAuth }) =
     try {
       await onLogin(username, password);
     } catch (error) {
+      console.log('Login error caught, showing funky message');
+      
       // Creative error messages based on user type
       const errorMessages = isInstaller 
         ? [
             "🔧 Access denied! Your installer credentials seem to be taking a coffee break.",
             "⚡ Oops! Even the best installers sometimes mix up their wires... er, passwords!",
             "🏗️ Construction site closed! Double-check your installer credentials.",
-            "🔋 Power down! Your login seems to be running on empty batteries."
+            "🔋 Power down! Your login seems to be running on empty batteries.",
+            "🛠️ Tool malfunction! Your login wrench needs some adjusting.",
+            "⚙️ Looks like your credentials got tangled in the solar panel cables!"
           ]
         : [
             "☀️ Cloud cover detected! Your login credentials are hiding behind some clouds.",
             "🌅 The sun hasn't risen on your account yet - check those login details!",
             "⚡ Energy levels low! Your username or password needs a solar boost.",
-            "🔋 Battery depleted! Time to recharge your login credentials."
+            "🔋 Battery depleted! Time to recharge your login credentials.",
+            "🌞 Solar eclipse in progress! Your login seems to be in the shadows.",
+            "💡 Lightbulb moment needed! Double-check those glowing credentials!"
           ];
 
       const randomError = errorMessages[Math.floor(Math.random() * errorMessages.length)];
+      console.log('Setting funky error:', randomError);
       setError(randomError);
       
-      // Also show a toast with a more serious message
-      toast.error(`Login Failed`, {
-        description: isInstaller 
-          ? "Invalid installer credentials. Please verify your username and password."
-          : "Invalid credentials. Please check your username and password."
+      // Also show a toast with the funky message
+      toast.error("Login Failed", {
+        description: randomError
       });
     } finally {
       setIsLoading(false);
@@ -94,11 +100,11 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLogin, onToggleAuth }) =
             </span>
           </div>
 
-          {/* Error Alert */}
+          {/* Error Alert - Updated to show funky messages */}
           {error && (
-            <Alert variant="destructive" className="mb-4 animate-fade-in">
+            <Alert variant="destructive" className="mb-4 animate-pulse border-2">
               <AlertTriangle className="h-4 w-4" />
-              <AlertDescription className="font-medium">
+              <AlertDescription className="font-medium text-sm">
                 {error}
               </AlertDescription>
             </Alert>
@@ -110,6 +116,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLogin, onToggleAuth }) =
             <div className={`text-sm space-y-1 ${isInstaller ? 'text-orange-700' : 'text-blue-700'}`}>
               <p><strong>Demo User:</strong> demo / demo123</p>
               <p><strong>Admin User:</strong> admin / admin123</p>
+              <p className="text-xs mt-2 opacity-75">Try wrong credentials to see fun error messages! 🎉</p>
             </div>
           </div>
 
@@ -142,8 +149,9 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLogin, onToggleAuth }) =
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 transform -translate-y-1/2"
+                  className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500 hover:text-gray-700 transition-colors"
                   disabled={isLoading}
+                  tabIndex={-1}
                 >
                   {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
@@ -152,7 +160,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLogin, onToggleAuth }) =
 
             <Button 
               type="submit" 
-              className={`w-full ${isInstaller ? 'bg-gradient-to-r from-orange-500 to-red-500' : 'bg-gradient-to-r from-blue-500 to-cyan-500'}`}
+              className={`w-full ${isInstaller ? 'bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600' : 'bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600'}`}
               disabled={isLoading}
             >
               {isLoading ? 'Signing In...' : `Sign In as ${isInstaller ? 'Installer' : 'Customer'}`}
