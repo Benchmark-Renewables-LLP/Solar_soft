@@ -1,0 +1,187 @@
+import React, { useState } from 'react';
+import { User, Lock, Eye, EyeOff, Building, AlertTriangle } from 'lucide-react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
+import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { GoogleSignInButton } from './GoogleSignInButton';
+import { toast } from 'sonner';
+
+interface LoginFormProps {
+  onLogin: (email: string, password: string) => void;
+  onToggleAuth: () => void;
+}
+
+export const LoginForm: React.FC<LoginFormProps> = ({ onLogin, onToggleAuth }) => {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [isInstaller, setIsInstaller] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setError('');
+
+    try {
+      await onLogin(username, password);
+    } catch (error) {
+      // Creative error messages based on user type
+      const errorMessages = isInstaller 
+        ? [
+            "🔧 Access denied! Your installer credentials seem to be taking a coffee break.",
+            "⚡ Oops! Even the best installers sometimes mix up their wires... er, passwords!",
+            "🏗️ Construction site closed! Double-check your installer credentials.",
+            "🔋 Power down! Your login seems to be running on empty batteries."
+          ]
+        : [
+            "☀️ Cloud cover detected! Your login credentials are hiding behind some clouds.",
+            "🌅 The sun hasn't risen on your account yet - check those login details!",
+            "⚡ Energy levels low! Your username or password needs a solar boost.",
+            "🔋 Battery depleted! Time to recharge your login credentials."
+          ];
+
+      const randomError = errorMessages[Math.floor(Math.random() * errorMessages.length)];
+      setError(randomError);
+      
+      // Also show a toast with a more serious message
+      toast.error(`Login Failed`, {
+        description: isInstaller 
+          ? "Invalid installer credentials. Please verify your username and password."
+          : "Invalid credentials. Please check your username and password."
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    // TODO: Implement Google OAuth flow
+    console.log('Google Sign-In clicked - requires implementation');
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-emerald-50 flex items-center justify-center p-4">
+      <Card className="w-full max-w-md">
+        <CardHeader className="text-center">
+          <div className={`p-3 rounded-xl w-fit mx-auto mb-4 ${isInstaller ? 'bg-gradient-to-r from-orange-500 to-red-500' : 'bg-gradient-to-r from-blue-500 to-cyan-500'}`}>
+            {isInstaller ? <Building className="w-8 h-8 text-white" /> : <User className="w-8 h-8 text-white" />}
+          </div>
+          <CardTitle className={`text-2xl font-bold bg-clip-text text-transparent ${isInstaller ? 'bg-gradient-to-r from-orange-600 to-red-600' : 'bg-gradient-to-r from-blue-600 to-cyan-600'}`}>
+            Solar PV Dashboard
+          </CardTitle>
+          <p className="text-slate-600">
+            {isInstaller ? 'Sign in as installer to manage systems' : 'Sign in to access your solar system'}
+          </p>
+        </CardHeader>
+        <CardContent>
+          {/* User Type Toggle */}
+          <div className="flex items-center justify-center space-x-4 mb-6 p-4 bg-slate-50 rounded-lg">
+            <span className={`text-sm font-medium ${!isInstaller ? 'text-blue-600' : 'text-slate-500'}`}>
+              Customer
+            </span>
+            <Switch
+              checked={isInstaller}
+              onCheckedChange={setIsInstaller}
+              className="data-[state=checked]:bg-orange-500"
+            />
+            <span className={`text-sm font-medium ${isInstaller ? 'text-orange-600' : 'text-slate-500'}`}>
+              Installer
+            </span>
+          </div>
+
+          {/* Error Alert */}
+          {error && (
+            <Alert variant="destructive" className="mb-4 animate-fade-in">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertDescription className="font-medium">
+                {error}
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {/* HARDCODED DEMO CREDENTIALS - Remove in production */}
+          <div className={`border rounded-lg p-4 mb-6 ${isInstaller ? 'bg-orange-50 border-orange-200' : 'bg-blue-50 border-blue-200'}`}>
+            <h3 className={`font-semibold mb-2 ${isInstaller ? 'text-orange-800' : 'text-blue-800'}`}>Demo Credentials</h3>
+            <div className={`text-sm space-y-1 ${isInstaller ? 'text-orange-700' : 'text-blue-700'}`}>
+              <p><strong>Demo User:</strong> demo / demo123</p>
+              <p><strong>Admin User:</strong> admin / admin123</p>
+            </div>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="username">Username</Label>
+              <Input
+                id="username"
+                type="text"
+                placeholder="Enter your username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                required
+                disabled={isLoading}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="password">Password</Label>
+              <div className="relative">
+                <Input
+                  id="password"
+                  type={showPassword ? 'text' : 'password'}
+                  placeholder="Enter your password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  disabled={isLoading}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 transform -translate-y-1/2"
+                  disabled={isLoading}
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
+            <Button 
+              type="submit" 
+              className={`w-full ${isInstaller ? 'bg-gradient-to-r from-orange-500 to-red-500' : 'bg-gradient-to-r from-blue-500 to-cyan-500'}`}
+              disabled={isLoading}
+            >
+              {isLoading ? 'Signing In...' : `Sign In as ${isInstaller ? 'Installer' : 'Customer'}`}
+            </Button>
+          </form>
+          
+          <div className="mt-4">
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center">
+                <span className="w-full border-t" />
+              </div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-white px-2 text-muted-foreground">Or continue with</span>
+              </div>
+            </div>
+            
+            <GoogleSignInButton onClick={handleGoogleSignIn} className="mt-4" />
+          </div>
+          
+          <div className="mt-4 text-center">
+            <button
+              onClick={onToggleAuth}
+              className={`text-sm hover:underline ${isInstaller ? 'text-orange-600' : 'text-blue-600'}`}
+            >
+              Don't have an account? Sign up
+            </button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+};
