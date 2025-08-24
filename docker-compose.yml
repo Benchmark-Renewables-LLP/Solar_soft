@@ -41,8 +41,8 @@ services:
 
   frontend:
     build:
-      context: ./frontend  # Correct path to frontend directory
-      dockerfile: Dockerfile  # File inside frontend/
+      context: ./frontend  # Points to frontend/ directory
+      dockerfile: Dockerfile  # File within frontend/
     volumes:
       - ./frontend:/app/frontend
       - frontend_node_modules:/app/frontend/node_modules
