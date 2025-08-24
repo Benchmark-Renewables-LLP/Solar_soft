@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from fastapi import HTTPException, status
-from jose import JWTError, jwt
+import jwt  # Changed from jose to jwt
 from passlib.context import CryptContext
 from backend.config.settings import settings
 from backend.models.user import UserCreate, UserLogin, UserOut, Token
@@ -18,7 +18,6 @@ def authenticate_user(login_id: str, password: str) -> UserOut | bool:
         return False
     if not verify_password(password, user_dict['password_hash']):
         return False
-    # Extract UserOut fields
     user = UserOut(id=user_dict['id'], username=user_dict['username'], email=user_dict['email'], role=user_dict['role'])
     return user
 
@@ -29,7 +28,7 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
     else:
         expire = datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.ALGORITHM)
+    encoded_jwt = jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.ALGORITHM)  # pyjwt
     return encoded_jwt
 
 async def register_user(user: UserCreate) -> UserOut:
@@ -41,7 +40,7 @@ async def register_user(user: UserCreate) -> UserOut:
     return created_user
 
 async def login_user(user_credentials: UserLogin) -> Token:
-    user = authenticate_user(user_credentials.username, user_credentials.password)  # username as login_id
+    user = authenticate_user(user_credentials.username, user_credentials.password)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

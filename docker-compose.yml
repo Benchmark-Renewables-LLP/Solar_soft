@@ -1,4 +1,3 @@
-version: '3.8'
 services:
   timescaledb:
     image: timescale/timescaledb:latest-pg16
@@ -14,29 +13,50 @@ services:
 
   fastapi:
     build:
-      context: .
-      dockerfile: Dockerfile  # Assume you create one for FastAPI
+      context: .  # Root directory for backend Dockerfile
     volumes:
-      - .:/app
+      - ./backend:/app/backend
+      - ./requirements.txt:/app/requirements.txt
     depends_on:
       - timescaledb
-      - redis
     environment:
       - DATABASE_URL=${DATABASE_URL}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - ALGORITHM=${ALGORITHM}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES}
+      - FRONTEND_URL=${FRONTEND_URL}
+      - COMPANY_KEY=${COMPANY_KEY}
+      - FLASK_ENV=${FLASK_ENV}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - BATCH_SIZE=${BATCH_SIZE}
+      - SOLARMAN_EMAIL=${SOLARMAN_EMAIL}
+      - SOLARMAN_PASSWORD_SHA256=${SOLARMAN_PASSWORD_SHA256}
+      - SOLARMAN_APP_ID=${SOLARMAN_APP_ID}
+      - SOLARMAN_APP_SECRET=${SOLARMAN_APP_SECRET}
     ports:
       - "8000:8000"
-    command: ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    command: ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/backend"]
+    env_file:
+      - .env
 
   frontend:
-    image: node:18
-    working_dir: /app/frontend
+    build:
+      context: ./frontend  # Correct path to frontend directory
+      dockerfile: Dockerfile  # File inside frontend/
     volumes:
-      - ./frontend:/app/frontend  # Assume frontend folder
+      - ./frontend:/app/frontend
+      - frontend_node_modules:/app/frontend/node_modules
     ports:
       - "3000:3000"
-    command: ["npm", "run","dev"]
+    command: ["npm", "run", "dev"]
     depends_on:
       - fastapi
+    env_file:
+      - .env
+    deploy:
+      resources:
+        limits:
+          memory: 1g
 
   pgadmin:
     image: dpage/pgadmin4:latest
@@ -55,18 +75,7 @@ services:
     ports:
       - "6379:6379"
 
-  airflow:
-    image: apache/airflow:2.7.0
-    ports:
-      - "8080:8080"
-    environment:
-      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql://postgres:password@timescaledb:5432/airflow
-    volumes:
-      - ./backend/airflow/dags:/opt/airflow/dags
-    depends_on:
-      - timescaledb
-
 volumes:
   timescaledb_data:
   pgadmin_data:
+  frontend_node_modules:

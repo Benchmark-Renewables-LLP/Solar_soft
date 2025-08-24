@@ -4,7 +4,7 @@ from backend.config.settings import settings
 from backend.models.user import UserOut
 import logging
 
-engine = create_engine(settings.POSTGRES_URL)
+engine = create_engine(settings.DATABASE_URL)
 Session = sessionmaker(bind=engine)
 logger = logging.getLogger(__name__)
 

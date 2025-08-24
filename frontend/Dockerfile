@@ -1,10 +1,6 @@
-FROM python:3.9-slim
-
-WORKDIR /app
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
+FROM node:20
+WORKDIR /app/frontend
+COPY package.json package-lock.json* ./
+RUN npm ci --include=dev --silent
 COPY . .
-
-CMD ["bash"]
+CMD ["npm", "run", "dev"]
