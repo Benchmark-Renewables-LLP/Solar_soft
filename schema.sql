@@ -1,5 +1,10 @@
--- Corrected SQL schema for solar dashboard project
--- Drop existing tables if they exist (for testing; remove in production)
+-- Simplified SQL schema for solar dashboard project
+-- Focus on users table for login; other tables included without triggers
+-- Drops all tables and types to ensure clean state
+-- Removes problematic jobs and triggers
+-- Run in a test database; remove DROP statements in production
+
+-- Drop existing tables and types
 DROP TABLE IF EXISTS error_logs CASCADE;
 DROP TABLE IF EXISTS customer_metrics CASCADE;
 DROP TABLE IF EXISTS device_data_historical CASCADE;
@@ -12,6 +17,7 @@ DROP TABLE IF EXISTS api_credentials CASCADE;
 DROP TABLE IF EXISTS customers CASCADE;
 DROP TYPE IF EXISTS api_provider_type CASCADE;
 DROP TYPE IF EXISTS severity_type CASCADE;
+DROP FUNCTION IF EXISTS update_updated_at_column CASCADE;
 
 -- Create ENUM types
 CREATE TYPE api_provider_type AS ENUM ('shinemonitor', 'solarman', 'soliscloud');
@@ -219,108 +225,11 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Create trigger function for per-customer device_data table
-CREATE OR REPLACE FUNCTION create_customer_device_table()
-RETURNS TRIGGER AS $$
-DECLARE
-    safe_customer_id TEXT;
-    table_exists BOOLEAN;
-BEGIN
-    IF NEW.customer_id IS NULL OR NEW.customer_id = '' THEN
-        INSERT INTO error_logs (
-            customer_id, device_sn, timestamp, api_provider, field_name, field_value, error_message, created_at
-        ) VALUES (
-            NULL, NULL, NOW(), NULL, 'customer_id', NEW.customer_id, 'Invalid customer_id: cannot be null or empty', NOW()
-        );
-        RAISE EXCEPTION 'Invalid customer_id: cannot be null or empty';
-    END IF;
-
-    safe_customer_id := REGEXP_REPLACE(LOWER(NEW.customer_id), '[^a-z0-9_]', '_');
-    safe_customer_id := LEFT(safe_customer_id, 63);
-
-    IF safe_customer_id = '' THEN
-        INSERT INTO error_logs (
-            customer_id, device_sn, timestamp, api_provider, field_name, field_value, error_message, created_at
-        ) VALUES (
-            NEW.customer_id, NULL, NOW(), NULL, 'customer_id', NEW.customer_id, 'Invalid customer_id after sanitization', NOW()
-        );
-        RAISE EXCEPTION 'Invalid customer_id after sanitization: %', NEW.customer_id;
-    END IF;
-
-    SELECT EXISTS (
-        SELECT FROM information_schema.tables 
-        WHERE table_name = format('customer_%I_device_data', safe_customer_id)
-    ) INTO table_exists;
-
-    IF NOT table_exists THEN
-        EXECUTE format('
-            CREATE TABLE customer_%I_device_data (
-                device_sn TEXT NOT NULL,
-                timestamp TIMESTAMPTZ NOT NULL,
-                pv01_voltage DOUBLE PRECISION CHECK (pv01_voltage IS NULL OR (pv01_voltage >= 0 AND pv01_voltage <= 1000)),
-                pv01_current DOUBLE PRECISION CHECK (pv01_current IS NULL OR (pv01_current >= 0 AND pv01_current <= 50)),
-                pv02_voltage DOUBLE PRECISION CHECK (pv02_voltage IS NULL OR (pv02_voltage >= 0 AND pv02_voltage <= 1000)),
-                pv02_current DOUBLE PRECISION CHECK (pv02_current IS NULL OR (pv02_current >= 0 AND pv02_current <= 50)),
-                pv03_voltage DOUBLE PRECISION CHECK (pv03_voltage IS NULL OR (pv03_voltage >= 0 AND pv03_voltage <= 1000)),
-                pv03_current DOUBLE PRECISION CHECK (pv03_current IS NULL OR (pv03_current >= 0 AND pv03_current <= 50)),
-                pv04_voltage DOUBLE PRECISION CHECK (pv04_voltage IS NULL OR (pv04_voltage >= 0 AND pv04_voltage <= 1000)),
-                pv04_current DOUBLE PRECISION CHECK (pv04_current IS NULL OR (pv04_current >= 0 AND pv04_current <= 50)),
-                pv05_voltage DOUBLE PRECISION CHECK (pv05_voltage IS NULL OR (pv05_voltage >= 0 AND pv05_voltage <= 1000)),
-                pv05_current DOUBLE PRECISION CHECK (pv05_current IS NULL OR (pv05_current >= 0 AND pv05_current <= 50)),
-                pv06_voltage DOUBLE PRECISION CHECK (pv06_voltage IS NULL OR (pv06_voltage >= 0 AND pv06_voltage <= 1000)),
-                pv06_current DOUBLE PRECISION CHECK (pv06_current IS NULL OR (pv06_current >= 0 AND pv06_current <= 50)),
-                pv07_voltage DOUBLE PRECISION CHECK (pv07_voltage IS NULL OR (pv07_voltage >= 0 AND pv07_voltage <= 1000)),
-                pv07_current DOUBLE PRECISION CHECK (pv07_current IS NULL OR (pv07_current >= 0 AND pv07_current <= 50)),
-                pv08_voltage DOUBLE PRECISION CHECK (pv08_voltage IS NULL OR (pv08_voltage >= 0 AND pv08_voltage <= 1000)),
-                pv08_current DOUBLE PRECISION CHECK (pv08_current IS NULL OR (pv08_current >= 0 AND pv08_current <= 50)),
-                pv09_voltage DOUBLE PRECISION CHECK (pv09_voltage IS NULL OR (pv09_voltage >= 0 AND pv09_voltage <= 1000)),
-                pv09_current DOUBLE PRECISION CHECK (pv09_current IS NULL OR (pv09_current >= 0 AND pv09_current <= 50)),
-                pv10_voltage DOUBLE PRECISION CHECK (pv10_voltage IS NULL OR (pv10_voltage >= 0 AND pv10_voltage <= 1000)),
-                pv10_current DOUBLE PRECISION CHECK (pv10_current IS NULL OR (pv10_current >= 0 AND pv10_current <= 50)),
-                pv11_voltage DOUBLE PRECISION CHECK (pv11_voltage IS NULL OR (pv11_voltage >= 0 AND pv11_voltage <= 1000)),
-                pv11_current DOUBLE PRECISION CHECK (pv11_current IS NULL OR (pv11_current >= 0 AND pv11_current <= 50)),
-                pv12_voltage DOUBLE PRECISION CHECK (pv12_voltage IS NULL OR (pv12_voltage >= 0 AND pv12_voltage <= 1000)),
-                pv12_current DOUBLE PRECISION CHECK (pv12_current IS NULL OR (pv12_current >= 0 AND pv12_current <= 50)),
-                r_voltage DOUBLE PRECISION CHECK (r_voltage IS NULL OR (r_voltage >= 0 AND r_voltage <= 300)),
-                s_voltage DOUBLE PRECISION CHECK (s_voltage IS NULL OR (s_voltage >= 0 AND s_voltage <= 300)),
-                t_voltage DOUBLE PRECISION CHECK (t_voltage IS NULL OR (t_voltage >= 0 AND t_voltage <= 300)),
-                r_current DOUBLE PRECISION CHECK (r_current IS NULL OR (r_current >= 0 AND r_current <= 100)),
-                s_current DOUBLE PRECISION CHECK (s_current IS NULL OR (s_current >= 0 AND s_current <= 100)),
-                t_current DOUBLE PRECISION CHECK (t_current IS NULL OR (t_current >= 0 AND t_current <= 100)),
-                rs_voltage DOUBLE PRECISION CHECK (rs_voltage IS NULL OR (rs_voltage >= 0 AND rs_voltage <= 500)),
-                st_voltage DOUBLE PRECISION CHECK (st_voltage IS NULL OR (st_voltage >= 0 AND st_voltage <= 500)),
-                tr_voltage DOUBLE PRECISION CHECK (tr_voltage IS NULL OR (tr_voltage >= 0 AND tr_voltage <= 500)),
-                frequency DOUBLE PRECISION CHECK (frequency IS NULL OR (frequency >= 0 AND frequency <= 70)),
-                total_power DOUBLE PRECISION CHECK (total_power IS NULL OR (total_power >= 0 AND total_power <= 100000)),
-                reactive_power DOUBLE PRECISION CHECK (reactive_power IS NULL OR (reactive_power >= -100000 AND reactive_power <= 100000)),
-                energy_today DOUBLE PRECISION CHECK (energy_today IS NULL OR (energy_today >= 0 AND energy_today <= 1000)),
-                cuf DOUBLE PRECISION CHECK (cuf IS NULL OR (cuf >= 0 AND cuf <= 100)),
-                pr DOUBLE PRECISION CHECK (pr IS NULL OR (pr >= 0 AND pr <= 100)),
-                state TEXT,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                updated_at TIMESTAMPTZ,
-                FOREIGN KEY (device_sn) REFERENCES devices(device_sn) ON DELETE CASCADE,
-                PRIMARY KEY (device_sn, timestamp)
-            );
-            SELECT create_hypertable(''customer_%I_device_data'', ''timestamp'');
-            CREATE TRIGGER update_customer_%I_device_data_updated_at
-            BEFORE UPDATE ON customer_%I_device_data
-            FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-        ', safe_customer_id, safe_customer_id, safe_customer_id);
-    END IF;
-    RETURN NEW;
-EXCEPTION
-    WHEN OTHERS THEN
-        INSERT INTO error_logs (
-            customer_id, device_sn, timestamp, api_provider, field_name, field_value, error_message, created_at
-        ) VALUES (
-            NEW.customer_id, NULL, NOW(), NULL, 'trigger_create_customer_device_table', NEW.customer_id, SQLERRM, NOW()
-        );
-        RAISE EXCEPTION 'Failed to create customer table: %', SQLERRM;
-END;
-$$ LANGUAGE plpgsql;
-
 -- Apply triggers for updated_at
+CREATE TRIGGER update_users_updated_at
+BEFORE UPDATE ON users
+FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
 CREATE TRIGGER update_customers_updated_at
 BEFORE UPDATE ON customers
 FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
@@ -356,29 +265,3 @@ FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_error_logs_updated_at
 BEFORE UPDATE ON error_logs
 FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
-CREATE TRIGGER trigger_create_customer_device_table
-AFTER INSERT ON customers
-FOR EACH ROW EXECUTE FUNCTION create_customer_device_table();
-
--- Create procedure for moving old data
-CREATE OR REPLACE PROCEDURE move_old_data_to_historical()
-LANGUAGE plpgsql
-AS $$
-DECLARE
-    customer_record RECORD;
-BEGIN
-    FOR customer_record IN SELECT customer_id FROM customers
-    LOOP
-        EXECUTE format('
-            INSERT INTO device_data_historical
-            SELECT * FROM customer_%I_device_data
-            WHERE timestamp < NOW() - INTERVAL ''30 days'';
-            
-            DELETE FROM customer_%I_device_data
-            WHERE timestamp < NOW() - INTERVAL ''30 days'';
-        ', customer_record.customer_id, customer_record.customer_id);
-    END LOOP;
-    RAISE NOTICE 'Old data moved to historical table.';
-END;
-$$;

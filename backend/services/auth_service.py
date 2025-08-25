@@ -1,13 +1,11 @@
 from datetime import datetime, timedelta
-from fastapi import HTTPException, status, Depends
-from fastapi.security import OAuth2PasswordBearer
+from fastapi import HTTPException, status
 import jwt
 from passlib.context import CryptContext
 from backend.config.settings import settings
-from backend.models.user import UserCreate, UserLogin, UserOut, Token
-from backend.repository.user_repo import create_user, get_user_by_username, get_user_by_email
+from backend.models.user import UserLogin, UserOut, Token
+from backend.repository.user_repo import get_user_by_username, get_user_by_email
 from backend.utils.auth_utils import verify_password
-import uuid
 import logging
 
 logger = logging.getLogger(__name__)
@@ -22,12 +20,17 @@ def authenticate_user(login_id: str, password: str, userType: str) -> UserOut | 
     if not user_dict:
         logger.error(f"User not found: {login_id}")
         return False
-    if user_dict['userType'] != userType:
-        logger.error(f"Incorrect userType: expected {user_dict['userType']}, got {userType}")
-        raise HTTPException(status_code=400, detail=f"Incorrect userType: must be {user_dict['userType']} for {login_id}")
+    if 'usertype' not in user_dict:
+        logger.error(f"Database schema error: 'usertype' column missing for user {login_id}")
+        raise HTTPException(status_code=500, detail="Database schema error: missing usertype column")
+    if user_dict['usertype'] != userType:
+        logger.error(f"Incorrect userType: expected {user_dict['usertype']}, got {userType}")
+        raise HTTPException(status_code=400, detail=f"Incorrect userType: must be {user_dict['usertype']}")
     if not verify_password(password, user_dict['password_hash']):
         logger.error(f"Password verification failed for {login_id}")
         return False
+    logger.debug(f"User authenticated: {user_dict['username']}")
+    user_dict['userType'] = user_dict.pop('usertype')  # Map usertype to userType
     return UserOut(**user_dict)
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
@@ -53,4 +56,5 @@ async def login_user(user_credentials: UserLogin) -> Token:
     access_token = create_access_token(
         data={"sub": user.username, "userType": user.userType}, expires_delta=access_token_expires
     )
+    logger.debug(f"Login successful for {user.username}")
     return Token(token=access_token, user=user)
