@@ -20,7 +20,23 @@ DROP TABLE IF EXISTS customers CASCADE;
 DROP TYPE IF EXISTS api_provider_type CASCADE;
 DROP TYPE IF EXISTS severity_type CASCADE;
 
--- Create ENUM type for api_provider
+
+-- Create ENUM type for api_provider-- Add users table for authentication
+CREATE TABLE users (
+    id TEXT PRIMARY KEY,  -- Matches MongoDB-like ID in API spec
+    username TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
+    email TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    userType TEXT NOT NULL CHECK (userType IN ('customer', 'installer')),
+    profile JSONB NOT NULL DEFAULT '{}',  -- Stores installationId/address or companyName/licenseNumber/phoneNumber
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    last_login TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ
+);
+CREATE INDEX idx_users_username ON users(username);
+CREATE INDEX idx_users_email ON users(email);
+
 CREATE TYPE api_provider_type AS ENUM ('shinemonitor', 'solarman', 'soliscloud');
 
 -- Create ENUM type for fault severity

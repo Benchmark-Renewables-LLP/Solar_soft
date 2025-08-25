@@ -1,28 +1,19 @@
 import axios from 'axios';
 
-const API_BASE_URL = import.meta.env.MODE === 'development' ? 'http://localhost:5000/api' : 'http://localhost:5000/api';
-
-interface TimeSeriesData {
-    timestamp: string;
-    value: number;
-}
+const API_BASE_URL = '/api';
 
 interface User {
     id: string;
     username: string;
-    fullname: string;
-    email?: string;
+    name: string;
+    email: string;
+    userType: 'customer' | 'installer';
+    profile: Record<string, any>;
 }
 
 interface AuthResponse {
     token: string;
     user: User;
-}
-
-interface ApiResponse<T> {
-    success: boolean;
-    data: T;
-    message?: string;
 }
 
 class ApiClient {
@@ -36,78 +27,36 @@ class ApiClient {
 
     constructor() {
         this.api.interceptors.response.use(
-            (response) => {
-                console.log('API Response:', response.data);
-                return response.data;
-            },
+            (response) => response.data,
             (error) => {
                 console.error('API Error:', error.message, error.response?.data || error);
-                return Promise.reject(error);
+                throw error;
             }
         );
     }
 
-    async register(userData: { username: string; fullname: string; password: string; confirmPassword: string; isInstaller: boolean }): Promise<AuthResponse> {
-        console.log('Register payload:', userData);
-        try {
-            const response = await this.api.post('/auth/register', userData);
-            // Return mock data for now since backend is not connected
-            return {
-                token: 'mock-jwt-token',
-                user: {
-                    id: 'user-' + Date.now(),
-                    username: userData.username,
-                    fullname: userData.fullname,
-                    email: userData.username === 'admin' ? 'priyanshu.uchat@gmail.com' : undefined
-                }
-            };
-        } catch (error: any) {
-            console.error('Registration failed:', error.message, error.response?.data || error);
-            throw error;
-        }
-    }
-
-    async login(credentials: { username: string; password: string; isInstaller: boolean }): Promise<AuthResponse> {
-        console.log('Login payload:', credentials);
+    async login(credentials: { username: string; password: string; userType: string }): Promise<AuthResponse> {
+        console.log('Raw login payload:', JSON.stringify(credentials));
         try {
             const response = await this.api.post('/auth/login', credentials);
-            // Return mock data for now since backend is not connected
-            return {
-                token: 'mock-jwt-token',
-                user: {
-                    id: 'user-' + Date.now(),
-                    username: credentials.username,
-                    fullname: credentials.username === 'admin' ? 'Priyanshu Uchat' : 
-                             credentials.username === 'demo' ? 'Demo User' : 'User',
-                    email: credentials.username === 'admin' ? 'priyanshu.uchat@gmail.com' : undefined
-                }
-            };
+            return response;
         } catch (error: any) {
-            console.error('Login failed:', error.message, error.response?.data || error);
+            console.error('Login error details:', error.response?.data);
             throw error;
         }
     }
 
     async logout(): Promise<void> {
-        try {
-            await this.api.post('/auth/logout');
-        } catch (error: any) {
-            console.error('Logout failed:', error.message, error.response?.data || error);
-            throw error;
-        }
+        await this.api.post('/auth/logout');
     }
 
-    async getPlants(userType = 'demo') {
+    async getPlants(userType = 'customer') {
         try {
             const response = await this.api.get('/plants');
             return response.data;
         } catch (error: any) {
             console.error('Error fetching plants:', error.message, error.response?.data || error);
-            console.log('User type for plants:', userType);
-            
-            // Return different plants based on user type with Indian locations
-            if (userType === 'demo') {
-                // Demo user sees only one plant
+            if (userType === 'customer') {
                 return [
                     {
                         id: 'plant-1',
@@ -122,109 +71,29 @@ class ApiClient {
                     }
                 ];
             } else {
-                // Admin sees all plants with Indian locations
                 return [
-                    {
-                        id: 'plant-1',
-                        name: 'Gujarat Solar Farm',
-                        location: 'Gandhinagar, Gujarat',
-                        totalCapacity: 500,
-                        currentGeneration: 425.8,
-                        efficiency: 85,
-                        deviceCount: 12,
-                        status: 'online',
-                        lastUpdate: new Date()
-                    },
-                    {
-                        id: 'plant-2',
-                        name: 'Thar Desert Power Station',
-                        location: 'Jaisalmer, Rajasthan',
-                        totalCapacity: 750,
-                        currentGeneration: 680.2,
-                        efficiency: 91,
-                        deviceCount: 18,
-                        status: 'online',
-                        lastUpdate: new Date()
-                    },
-                    {
-                        id: 'plant-3',
-                        name: 'Karnataka Solar Valley',
-                        location: 'Tumkur, Karnataka',
-                        totalCapacity: 300,
-                        currentGeneration: 0,
-                        efficiency: 0,
-                        deviceCount: 8,
-                        status: 'maintenance',
-                        lastUpdate: new Date()
-                    },
-                    {
-                        id: 'plant-4',
-                        name: 'Tamil Nadu Green Energy',
-                        location: 'Coimbatore, Tamil Nadu',
-                        totalCapacity: 450,
-                        currentGeneration: 378.5,
-                        efficiency: 84,
-                        deviceCount: 15,
-                        status: 'online',
-                        lastUpdate: new Date()
-                    },
-                    {
-                        id: 'plant-5',
-                        name: 'Maharashtra Solar Hub',
-                        location: 'Pune, Maharashtra',
-                        totalCapacity: 600,
-                        currentGeneration: 520.3,
-                        efficiency: 87,
-                        deviceCount: 20,
-                        status: 'online',
-                        lastUpdate: new Date()
-                    }
+                    { id: 'plant-1', name: 'Gujarat Solar Farm', location: 'Gandhinagar, Gujarat', totalCapacity: 500, currentGeneration: 425.8, efficiency: 85, deviceCount: 12, status: 'online', lastUpdate: new Date() },
+                    { id: 'plant-2', name: 'Thar Desert Power Station', location: 'Jaisalmer, Rajasthan', totalCapacity: 750, currentGeneration: 680.2, efficiency: 91, deviceCount: 18, status: 'online', lastUpdate: new Date() },
+                    { id: 'plant-3', name: 'Karnataka Solar Valley', location: 'Tumkur, Karnataka', totalCapacity: 300, currentGeneration: 0, efficiency: 0, deviceCount: 8, status: 'maintenance', lastUpdate: new Date() },
+                    { id: 'plant-4', name: 'Tamil Nadu Green Energy', location: 'Coimbatore, Tamil Nadu', totalCapacity: 450, currentGeneration: 378.5, efficiency: 84, deviceCount: 15, status: 'online', lastUpdate: new Date() },
+                    { id: 'plant-5', name: 'Maharashtra Solar Hub', location: 'Pune, Maharashtra', totalCapacity: 600, currentGeneration: 520.3, efficiency: 87, deviceCount: 20, status: 'online', lastUpdate: new Date() }
                 ];
             }
         }
     }
 
-    async getDevices(userType = 'demo') {
+    async getDevices(userType = 'customer') {
         try {
             const response = await this.api.get('/devices');
             return response.data;
         } catch (error: any) {
             console.error('Error fetching devices:', error.message, error.response?.data || error);
-            console.log('User type for devices:', userType);
-            
-            // Return different devices based on user type
-            if (userType === 'demo') {
-                // Demo user sees only 2 devices
+            if (userType === 'customer') {
                 return [
-                    { 
-                        id: 'dev-1', 
-                        plantId: 'plant-1', 
-                        name: 'Solar Inverter RJ-01', 
-                        type: 'inverter', 
-                        status: 'online', 
-                        currentOutput: 45.2, 
-                        efficiency: 89, 
-                        capacity: 50.0,
-                        location: 'Block A',
-                        lastMaintenance: '2024-01-15',
-                        lastUpdate: new Date() 
-                    },
-                    { 
-                        id: 'dev-2', 
-                        plantId: 'plant-1', 
-                        name: 'Panel Array RJ-B1', 
-                        type: 'panel', 
-                        status: 'online', 
-                        currentOutput: 40.0, 
-                        efficiency: 92, 
-                        capacity: 45.0,
-                        location: 'Block B',
-                        lastMaintenance: '2024-01-10',
-                        lastUpdate: new Date() 
-                    }
+                    { id: 'dev-1', plantId: 'plant-1', name: 'Solar Inverter RJ-01', type: 'inverter', status: 'online', currentOutput: 45.2, efficiency: 89, capacity: 50.0, location: 'Block A', lastMaintenance: '2024-01-15', lastUpdate: new Date() },
+                    { id: 'dev-2', plantId: 'plant-1', name: 'Panel Array RJ-B1', type: 'panel', status: 'online', currentOutput: 40.0, efficiency: 92, capacity: 45.0, location: 'Block B', lastMaintenance: '2024-01-10', lastUpdate: new Date() }
                 ];
             } else {
-                // Admin has access to all devices across multiple plants
                 return [
                     { id: 'dev-1', plantId: 'plant-1', name: 'Inverter GJ-A1 (High Capacity)', type: 'inverter', status: 'online', currentOutput: 85.2, efficiency: 94, location: 'Block A', lastMaintenance: '2024-01-15', lastUpdate: new Date() },
                     { id: 'dev-2', plantId: 'plant-1', name: 'Panel Array GJ-B1 (Premium)', type: 'panel', status: 'online', currentOutput: 78.7, efficiency: 96, location: 'Block B', lastMaintenance: '2024-01-10', lastUpdate: new Date() },
@@ -251,7 +120,6 @@ class ApiClient {
             return response.data;
         } catch (error: any) {
             console.error('Error fetching time series data:', error.message, error.response?.data || error);
-            // Return mock data for now
             return [];
         }
     }

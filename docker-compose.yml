@@ -7,13 +7,13 @@ services:
       - POSTGRES_DB=solar_db
     volumes:
       - timescaledb_data:/var/lib/postgresql/data
-      - .:/app
+      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql
     ports:
       - "5432:5432"
 
   fastapi:
     build:
-      context: .  # Root directory for backend Dockerfile
+      context: .
     volumes:
       - ./backend:/app/backend
       - ./requirements.txt:/app/requirements.txt
@@ -41,8 +41,8 @@ services:
 
   frontend:
     build:
-      context: ./frontend  # Points to frontend/ directory
-      dockerfile: Dockerfile  # File within frontend/
+      context: ./frontend
+      dockerfile: Dockerfile
     volumes:
       - ./frontend:/app/frontend
       - frontend_node_modules:/app/frontend/node_modules

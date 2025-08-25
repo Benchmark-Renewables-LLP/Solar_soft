@@ -1,21 +1,27 @@
 from pydantic import BaseModel, EmailStr, Field
-from typing import Literal
+from typing import Literal, Dict, Any
 
 class UserBase(BaseModel):
     username: str = Field(..., min_length=3, max_length=50)
+    name: str = Field(..., min_length=2)
     email: EmailStr
-    role: Literal["viewer", "installer"]  # As per project: user (viewer) and admin (installer)
+    userType: Literal["customer", "installer"]
 
 class UserCreate(UserBase):
-    password: str = Field(..., min_length=8)  # Plaintext input; hashed in service
+    password: str = Field(..., min_length=6)  # Relaxed from 8
+    profile: Dict[str, Any] = {}
 
 class UserLogin(BaseModel):
     username: str
     password: str
-
+    userType: Literal["customer", "installer"]
+     
 class UserOut(UserBase):
-    id: int
+    id: str
+    profile: Dict[str, Any]
+    created_at: str | None
+    last_login: str | None
 
 class Token(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
+    token: str
+    user: UserOut
