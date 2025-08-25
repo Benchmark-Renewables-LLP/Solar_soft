@@ -1,11 +1,4 @@
--- Corrected final SQL schema for solar dashboard project
--- Supports dynamic table generation for per-customer device_data tables
--- Uses TEXT instead of VARCHAR to follow PostgreSQL best practices
--- Includes shared device_data_historical, fault_logs, predictions, error_logs
--- Adds materialized view for admin metrics and trigger for new customer tables
--- Designed for ~800-1,000 customers, ~10 devices each, with TimescaleDB
--- Run in a test database; remove DROP statements in production
-
+-- Corrected SQL schema for solar dashboard project
 -- Drop existing tables if they exist (for testing; remove in production)
 DROP TABLE IF EXISTS error_logs CASCADE;
 DROP TABLE IF EXISTS customer_metrics CASCADE;
@@ -20,16 +13,19 @@ DROP TABLE IF EXISTS customers CASCADE;
 DROP TYPE IF EXISTS api_provider_type CASCADE;
 DROP TYPE IF EXISTS severity_type CASCADE;
 
+-- Create ENUM types
+CREATE TYPE api_provider_type AS ENUM ('shinemonitor', 'solarman', 'soliscloud');
+CREATE TYPE severity_type AS ENUM ('low', 'medium', 'high');
 
--- Create ENUM type for api_provider-- Add users table for authentication
+-- Create users table
 CREATE TABLE users (
-    id TEXT PRIMARY KEY,  -- Matches MongoDB-like ID in API spec
+    id TEXT PRIMARY KEY,
     username TEXT UNIQUE NOT NULL,
     name TEXT NOT NULL,
     email TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
     userType TEXT NOT NULL CHECK (userType IN ('customer', 'installer')),
-    profile JSONB NOT NULL DEFAULT '{}',  -- Stores installationId/address or companyName/licenseNumber/phoneNumber
+    profile JSONB NOT NULL DEFAULT '{}',
     created_at TIMESTAMPTZ DEFAULT NOW(),
     last_login TIMESTAMPTZ,
     updated_at TIMESTAMPTZ
@@ -37,12 +33,12 @@ CREATE TABLE users (
 CREATE INDEX idx_users_username ON users(username);
 CREATE INDEX idx_users_email ON users(email);
 
-CREATE TYPE api_provider_type AS ENUM ('shinemonitor', 'solarman', 'soliscloud');
+INSERT INTO users (id, username, name, email, password_hash, userType, profile)
+VALUES 
+    ('507f1f77bcf86cd799439011', 'demo', 'Demo User', 'demo@example.com', '$2b$12$mcZLDV4fPyhoKsGIUyk03eQxkANE0ifIFYJpITZAAb1s61BE.Z9Oe', 'customer', '{"installationId": "INST-12345", "address": "123 Solar Street, CA"}'),
+    ('507f1f77bcf86cd799439012', 'admin', 'Admin User', 'admin@example.com', '$2b$12$b4Dp/13Bh2bN/5nlpKxBrer3sN0zRxrnSPlEk7Ex8lKlNGog6eedu', 'installer', '{"companyName": "Solar Install Co", "licenseNumber": "LIC-789", "phoneNumber": "+1-555-0123"}');
 
--- Create ENUM type for fault severity
-CREATE TYPE severity_type AS ENUM ('low', 'medium', 'high');
-
--- Create customers table (central hub)
+-- Create customers table
 CREATE TABLE customers (
     customer_id TEXT PRIMARY KEY,
     customer_name TEXT NOT NULL,
@@ -111,7 +107,7 @@ CREATE TABLE weather_data (
 );
 SELECT create_hypertable('weather_data', 'timestamp');
 
--- Create device_data_historical table (shared for all customers)
+-- Create device_data_historical table
 CREATE TABLE device_data_historical (
     device_sn TEXT NOT NULL,
     timestamp TIMESTAMPTZ NOT NULL,
@@ -208,7 +204,7 @@ CREATE TABLE error_logs (
 );
 SELECT create_hypertable('error_logs', 'timestamp');
 
--- Create materialized view for admin panel metrics (initially empty)
+-- Create materialized view for admin panel metrics
 CREATE MATERIALIZED VIEW customer_metrics AS
 SELECT customer_id, 0.0 AS total_energy_today, 0.0 AS avg_pr, 0 AS active_devices
 FROM customers
@@ -223,14 +219,13 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Create trigger function to generate per-customer device_data table
+-- Create trigger function for per-customer device_data table
 CREATE OR REPLACE FUNCTION create_customer_device_table()
 RETURNS TRIGGER AS $$
 DECLARE
     safe_customer_id TEXT;
     table_exists BOOLEAN;
 BEGIN
-    -- Validate customer_id
     IF NEW.customer_id IS NULL OR NEW.customer_id = '' THEN
         INSERT INTO error_logs (
             customer_id, device_sn, timestamp, api_provider, field_name, field_value, error_message, created_at
@@ -240,11 +235,9 @@ BEGIN
         RAISE EXCEPTION 'Invalid customer_id: cannot be null or empty';
     END IF;
 
-    -- Sanitize customer_id
     safe_customer_id := REGEXP_REPLACE(LOWER(NEW.customer_id), '[^a-z0-9_]', '_');
     safe_customer_id := LEFT(safe_customer_id, 63);
 
-    -- Ensure safe_customer_id is not empty
     IF safe_customer_id = '' THEN
         INSERT INTO error_logs (
             customer_id, device_sn, timestamp, api_provider, field_name, field_value, error_message, created_at
@@ -254,14 +247,12 @@ BEGIN
         RAISE EXCEPTION 'Invalid customer_id after sanitization: %', NEW.customer_id;
     END IF;
 
-    -- Check if table exists
     SELECT EXISTS (
         SELECT FROM information_schema.tables 
         WHERE table_name = format('customer_%I_device_data', safe_customer_id)
     ) INTO table_exists;
 
     IF NOT table_exists THEN
-        -- Create customer_{safe_customer_id}_device_data table
         EXECUTE format('
             CREATE TABLE customer_%I_device_data (
                 device_sn TEXT NOT NULL,
@@ -315,7 +306,7 @@ BEGIN
             CREATE TRIGGER update_customer_%I_device_data_updated_at
             BEFORE UPDATE ON customer_%I_device_data
             FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-        ', safe_customer_id, safe_customer_id, safe_customer_id, safe_customer_id);
+        ', safe_customer_id, safe_customer_id, safe_customer_id);
     END IF;
     RETURN NEW;
 EXCEPTION
@@ -366,18 +357,17 @@ CREATE TRIGGER update_error_logs_updated_at
 BEFORE UPDATE ON error_logs
 FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
--- Create trigger for per-customer table creation
 CREATE TRIGGER trigger_create_customer_device_table
 AFTER INSERT ON customers
 FOR EACH ROW EXECUTE FUNCTION create_customer_device_table();
 
+-- Create procedure for moving old data
 CREATE OR REPLACE PROCEDURE move_old_data_to_historical()
 LANGUAGE plpgsql
 AS $$
 DECLARE
     customer_record RECORD;
 BEGIN
-    -- Loop over customers to handle per-customer tables
     FOR customer_record IN SELECT customer_id FROM customers
     LOOP
         EXECUTE format('
@@ -389,9 +379,6 @@ BEGIN
             WHERE timestamp < NOW() - INTERVAL ''30 days'';
         ', customer_record.customer_id, customer_record.customer_id);
     END LOOP;
-    
     RAISE NOTICE 'Old data moved to historical table.';
 END;
 $$;
--- Schedule move_old_data_to_historical (weekly; assumes function exists)
-SELECT add_job('move_old_data_to_historical', '1 week', initial_start => '2025-06-17 00:00:00+05:30');
