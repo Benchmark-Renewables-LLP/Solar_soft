@@ -3,10 +3,11 @@ from fastapi import HTTPException, status
 import jwt
 from passlib.context import CryptContext
 from backend.config.settings import settings
-from backend.models.user import UserLogin, UserOut, Token
-from backend.repository.user_repo import get_user_by_username, get_user_by_email
+from backend.models.user import UserCreate, UserLogin, UserOut, Token
+from backend.repository.user_repo import get_user_by_username, get_user_by_email, create_user
 from backend.utils.auth_utils import verify_password
 import logging
+import uuid
 
 logger = logging.getLogger(__name__)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -30,7 +31,7 @@ def authenticate_user(login_id: str, password: str, userType: str) -> UserOut | 
         logger.error(f"Password verification failed for {login_id}")
         return False
     logger.debug(f"User authenticated: {user_dict['username']}")
-    user_dict['userType'] = user_dict.pop('usertype')  # Map usertype to userType
+    user_dict['userType'] = user_dict.pop('usertype')
     return UserOut(**user_dict)
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
@@ -58,3 +59,49 @@ async def login_user(user_credentials: UserLogin) -> Token:
     )
     logger.debug(f"Login successful for {user.username}")
     return Token(token=access_token, user=user)
+
+async def register_user(user_data: UserCreate) -> Token:
+    logger.debug(f"Registering user: {user_data}")
+    existing_user = get_user_by_username(user_data.username) or get_user_by_email(user_data.email)
+    if existing_user:
+        logger.error(f"User already exists: username={user_data.username}, email={user_data.email}")
+        raise HTTPException(status_code=400, detail="Username or email already exists")
+    
+    password_hash = hash_password(user_data.password)
+    
+    profile = {
+        "whatsappNumber": user_data.whatsappNumber,
+        "address": user_data.address or None,
+        "panelBrand": user_data.panelBrand or None,
+        "panelCapacity": user_data.panelCapacity,
+        "panelType": user_data.panelType or None,
+        "inverterBrand": user_data.inverterBrand or None,
+        "inverterCapacity": user_data.inverterCapacity
+    }
+    profile = {k: v for k, v in profile.items() if v is not None}
+    
+    user_dict = {
+        "id": str(uuid.uuid4()),
+        "username": user_data.username,
+        "name": user_data.name,
+        "email": user_data.email,
+        "password_hash": password_hash,
+        "usertype": user_data.userType,
+        "profile": profile,
+        "created_at": datetime.utcnow(),
+        "last_login": None,
+        "updated_at": None
+    }
+    try:
+        created_user = await create_user(user_dict)
+        logger.debug(f"User created: {created_user['username']}")
+        user_out = UserOut(**created_user)
+        
+        access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={"sub": user_out.username, "userType": user_out.userType}, expires_delta=access_token_expires
+        )
+        return Token(token=access_token, user=user_out)
+    except Exception as e:
+        logger.error(f"Failed to create user: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to create user: {str(e)}")

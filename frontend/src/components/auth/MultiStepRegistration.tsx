@@ -1,5 +1,4 @@
-
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import * as Yup from 'yup';
 import { UserPlus, ChevronRight, ChevronLeft, User, Zap, MapPin, AlertTriangle, Settings, Eye, EyeOff, BarChart3 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -106,11 +105,32 @@ export const MultiStepRegistration: React.FC<MultiStepRegistrationProps> = ({ on
     whatsappNumber: '',
     address: '',
   });
+  const addressInputRef = useRef<HTMLInputElement>(null);
+  const autocompleteRef = useRef<google.maps.places.Autocomplete | null>(null);
+
+  useEffect(() => {
+    if (currentStep === 3 && addressInputRef.current && window.google) {
+      autocompleteRef.current = new google.maps.places.Autocomplete(addressInputRef.current, {
+        types: ['address'],
+        componentRestrictions: { country: ['us', 'ca', 'in'] }, // Restrict to specific countries, adjust as needed
+      });
+      autocompleteRef.current.addListener('place_changed', () => {
+        const place = autocompleteRef.current?.getPlace();
+        if (place && place.formatted_address) {
+          handleInputChange('address', place.formatted_address);
+        }
+      });
+    }
+    return () => {
+      if (autocompleteRef.current) {
+        google.maps.event.clearInstanceListeners(autocompleteRef.current);
+      }
+    };
+  }, [currentStep]);
 
   const totalSteps = 3;
   const progress = (currentStep / totalSteps) * 100;
 
-  // Real-time validation for immediate feedback
   const handleInputChange = (field: keyof FormData, value: string | boolean) => {
     const trimmedValue = typeof value === 'string' ? value.trim() : value;
     setFormData((prev) => ({
@@ -118,7 +138,6 @@ export const MultiStepRegistration: React.FC<MultiStepRegistrationProps> = ({ on
       [field]: trimmedValue,
     }));
     
-    // Clear error when user starts typing
     if (error) {
       setError(null);
     }
@@ -205,24 +224,23 @@ export const MultiStepRegistration: React.FC<MultiStepRegistrationProps> = ({ on
       return errors[Math.floor(Math.random() * errors.length)];
     }
 
-    // Specific validation errors
     if (field === 'username' && value.length < 3) {
-      return solarFieldErrors.username[2]; // Short circuit message
+      return solarFieldErrors.username[2];
     }
     if (field === 'password' && value.length < 6) {
-      return solarFieldErrors.password[3]; // Battery empty message
+      return solarFieldErrors.password[3];
     }
     if (field === 'confirmPassword' && value !== formData.password) {
-      return solarFieldErrors.confirmPassword[0]; // Inverter malfunction
+      return solarFieldErrors.confirmPassword[0];
     }
     if (field === 'email' && !value.includes('@')) {
-      return solarFieldErrors.email[2]; // Add @ symbol
+      return solarFieldErrors.email[2];
     }
     if (field === 'whatsappNumber' && !/^\+?[1-9]\d{9,14}$/.test(value)) {
-      return solarFieldErrors.whatsappNumber[1]; // Not enough digits
+      return solarFieldErrors.whatsappNumber[1];
     }
     if ((field === 'panelCapacity' || field === 'inverterCapacity') && !/^\d*\.?\d+$/.test(value)) {
-      return solarFieldErrors[field][3]; // Enter as number
+      return solarFieldErrors[field][3];
     }
 
     return null;
@@ -233,7 +251,7 @@ export const MultiStepRegistration: React.FC<MultiStepRegistrationProps> = ({ on
       1: ['fullname', 'username', 'password', 'confirmPassword'],
       2: formData.isInstaller 
         ? ['panelBrand', 'panelCapacity', 'panelType', 'inverterBrand', 'inverterCapacity']
-        : [], // Optional for customers
+        : [],
       3: ['email', 'whatsappNumber', ...(formData.isInstaller ? ['address'] : [])]
     };
 
@@ -275,30 +293,8 @@ export const MultiStepRegistration: React.FC<MultiStepRegistrationProps> = ({ on
     setIsLoading(true);
     setError(null);
     
-    // Simulate registration process without backend
     try {
-      // Mock successful registration
-      await new Promise(resolve => setTimeout(resolve, 2000)); // Simulate API call
-      
-      toast.success("🎉 Welcome to the Solar Family!", {
-        description: `Your ${formData.isInstaller ? 'installer' : 'customer'} account has been created successfully. Time to harness the sun!`,
-      });
-      
-      // Reset form and navigate to success
-      console.log('Registration completed successfully with data:', formData);
-      
-      // Call onRegister with mock successful response
-      await onRegister({
-        username: formData.username,
-        fullname: formData.fullname,
-        password: formData.password,
-        confirmPassword: formData.confirmPassword,
-        isInstaller: formData.isInstaller,
-        email: formData.email,
-        whatsappNumber: formData.whatsappNumber,
-        address: formData.address
-      });
-      
+      await onRegister(formData);
     } catch (error: any) {
       const solarErrors = [
         "🌩️ Solar flare detected! Registration temporarily scattered across the photosphere. Try again!",
@@ -315,7 +311,7 @@ export const MultiStepRegistration: React.FC<MultiStepRegistrationProps> = ({ on
       const randomError = solarErrors[Math.floor(Math.random() * solarErrors.length)];
       setError(randomError);
       toast.error("Registration Failed", {
-        description: "Oops! Something went haywire in our solar system. Please try again!",
+        description: error.response?.data?.detail || "Oops! Something went haywire in our solar system. Please try again!",
       });
     } finally {
       setIsLoading(false);
@@ -559,7 +555,7 @@ export const MultiStepRegistration: React.FC<MultiStepRegistrationProps> = ({ on
                 id="whatsappNumber"
                 type="tel"
                 placeholder="Enter your WhatsApp number (e.g., +1234567890)"
-                value={formData.whatsappNumber}
+                value={formData.whatsAppNumber}
                 onChange={(e) => handleInputChange('whatsappNumber', e.target.value)}
                 required
                 disabled={isLoading}
@@ -578,6 +574,7 @@ export const MultiStepRegistration: React.FC<MultiStepRegistrationProps> = ({ on
                 onChange={(e) => handleInputChange('address', e.target.value)}
                 required={formData.isInstaller}
                 disabled={isLoading}
+                ref={addressInputRef}
               />
             </div>
           </div>
@@ -590,7 +587,6 @@ export const MultiStepRegistration: React.FC<MultiStepRegistrationProps> = ({ on
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-emerald-50 dark:from-slate-900 dark:via-slate-800 dark:to-slate-700 flex">
-      {/* Left Side - Features Showcase */}
       <div className="hidden lg:flex lg:w-1/2 xl:w-2/5 bg-gradient-to-br from-blue-600 via-cyan-600 to-emerald-600 relative overflow-hidden">
         <div className="absolute inset-0 bg-black/20"></div>
         <div className="relative z-10 flex flex-col justify-center px-12 py-16 text-white">
@@ -656,161 +652,150 @@ export const MultiStepRegistration: React.FC<MultiStepRegistrationProps> = ({ on
           </div>
         </div>
         
-        {/* Animated Background Elements */}
         <div className="absolute top-10 right-10 w-20 h-20 bg-yellow-300/20 rounded-full animate-bounce"></div>
         <div className="absolute bottom-20 left-10 w-16 h-16 bg-green-300/20 rounded-full animate-pulse"></div>
         <div className="absolute top-1/2 right-1/4 w-12 h-12 bg-blue-300/20 rounded-full animate-ping"></div>
       </div>
 
-      {/* Right Side - Registration Form */}
       <div className="flex-1 flex items-center justify-center px-6 py-12">
-        <div className="w-full max-w-md">
-          <Card className="bg-white/90 backdrop-blur-sm border border-slate-200 shadow-2xl">
-            <CardHeader className="space-y-1 pb-6">
-              <div className="flex items-center justify-center space-x-2 mb-4">
-                <div className="bg-gradient-to-r from-blue-500 to-cyan-500 p-3 rounded-xl">
-                  <UserPlus className="w-8 h-8 text-white" />
-                </div>
+        <Card className="bg-white/90 backdrop-blur-sm border border-slate-200 shadow-2xl">
+          <CardHeader className="space-y-1 pb-6">
+            <div className="flex items-center justify-center space-x-2 mb-4">
+              <div className="bg-gradient-to-r from-blue-500 to-cyan-500 p-3 rounded-xl">
+                <UserPlus className="w-8 h-8 text-white" />
               </div>
-              <CardTitle className="text-2xl font-bold text-center bg-gradient-to-r from-blue-600 to-cyan-600 bg-clip-text text-transparent">
-                Create Your Solar Account
-              </CardTitle>
-              <p className="text-center text-slate-600">
-                Join thousands of solar enthusiasts
-              </p>
-              
-              {/* Progress Bar */}
-              <div className="mt-6">
-                <div className="flex justify-between text-sm text-slate-600 mb-2">
-                  <span>Step {currentStep} of {totalSteps}</span>
-                  <span>{Math.round(progress)}% Complete</span>
-                </div>
-                <Progress value={progress} className="h-2" />
+            </div>
+            <CardTitle className="text-2xl font-bold text-center bg-gradient-to-r from-blue-600 to-cyan-600 bg-clip-text text-transparent">
+              Create Your Solar Account
+            </CardTitle>
+            <p className="text-center text-slate-600">
+              Join thousands of solar enthusiasts
+            </p>
+            
+            <div className="mt-6">
+              <div className="flex justify-between text-sm text-slate-600 mb-2">
+                <span>Step {currentStep} of {totalSteps}</span>
+                <span>{Math.round(progress)}% Complete</span>
               </div>
-              
-              {/* Step Indicator */}
-              <div className="flex justify-center space-x-8 mt-4">
-                {[1, 2, 3].map((step) => (
-                  <div 
-                    key={step} 
-                    className={`flex flex-col items-center space-y-2 ${
-                      step <= currentStep ? 'text-blue-600' : 'text-slate-400'
-                    }`}
+              <Progress value={progress} className="h-2" />
+            </div>
+            
+            <div className="flex justify-center space-x-8 mt-4">
+              {[1, 2, 3].map((step) => (
+                <div 
+                  key={step} 
+                  className={`flex flex-col items-center space-y-2 ${
+                    step <= currentStep ? 'text-blue-600' : 'text-slate-400'
+                  }`}
+                >
+                  <div className={`p-2 rounded-full border-2 ${
+                    step <= currentStep 
+                      ? 'border-blue-600 bg-blue-50' 
+                      : 'border-slate-300 bg-slate-50'
+                  }`}>
+                    {getStepIcon(step)}
+                  </div>
+                  <span className="text-xs font-medium">{getStepTitle(step)}</span>
+                </div>
+              ))}
+            </div>
+          </CardHeader>
+
+          <CardContent>
+            <form onSubmit={handleSubmit} className="space-y-6">
+              {currentStep === 1 && (
+                <div className="flex items-center justify-between p-4 bg-gradient-to-r from-blue-50 to-cyan-50 rounded-lg border border-blue-200">
+                  <div>
+                    <Label htmlFor="installer-toggle" className="font-medium text-slate-700">
+                      Are you an installer?
+                    </Label>
+                    <p className="text-sm text-slate-600">
+                      {formData.isInstaller ? 'Professional installer account' : 'Customer/homeowner account'}
+                    </p>
+                  </div>
+                  <Switch
+                    id="installer-toggle"
+                    checked={formData.isInstaller}
+                    onCheckedChange={(checked) => handleInputChange('isInstaller', checked)}
+                    disabled={isLoading}
+                  />
+                </div>
+              )}
+
+              {renderStepContent()}
+
+              {error && (
+                <Alert className="border-red-200 bg-red-50">
+                  <AlertTriangle className="h-4 w-4 text-red-600" />
+                  <AlertDescription className="text-red-700 font-medium">
+                    {error}
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              <div className="flex justify-between space-x-4 pt-6">
+                {currentStep > 1 && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handlePrevious}
+                    disabled={isLoading}
+                    className="flex items-center space-x-2"
                   >
-                    <div className={`p-2 rounded-full border-2 ${
-                      step <= currentStep 
-                        ? 'border-blue-600 bg-blue-50' 
-                        : 'border-slate-300 bg-slate-50'
-                    }`}>
-                      {getStepIcon(step)}
-                    </div>
-                    <span className="text-xs font-medium">{getStepTitle(step)}</span>
-                  </div>
-                ))}
+                    <ChevronLeft className="w-4 h-4" />
+                    <span>Previous</span>
+                  </Button>
+                )}
+                
+                <div className="flex-1"></div>
+                
+                {currentStep < totalSteps ? (
+                  <Button
+                    type="button"
+                    onClick={handleNext}
+                    disabled={isLoading}
+                    className="flex items-center space-x-2 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700"
+                  >
+                    <span>Next</span>
+                    <ChevronRight className="w-4 h-4" />
+                  </Button>
+                ) : (
+                  <Button
+                    type="submit"
+                    disabled={isLoading}
+                    className="flex items-center space-x-2 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700"
+                  >
+                    {isLoading ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                        <span>Creating Account...</span>
+                      </>
+                    ) : (
+                      <>
+                        <UserPlus className="w-4 h-4" />
+                        <span>Create Account</span>
+                      </>
+                    )}
+                  </Button>
+                )}
               </div>
-            </CardHeader>
 
-            <CardContent>
-              <form onSubmit={handleSubmit} className="space-y-6">
-                {/* Account Type Toggle */}
-                {currentStep === 1 && (
-                  <div className="flex items-center justify-between p-4 bg-gradient-to-r from-blue-50 to-cyan-50 rounded-lg border border-blue-200">
-                    <div>
-                      <Label htmlFor="installer-toggle" className="font-medium text-slate-700">
-                        Are you an installer?
-                      </Label>
-                      <p className="text-sm text-slate-600">
-                        {formData.isInstaller ? 'Professional installer account' : 'Customer/homeowner account'}
-                      </p>
-                    </div>
-                    <Switch
-                      id="installer-toggle"
-                      checked={formData.isInstaller}
-                      onCheckedChange={(checked) => handleInputChange('isInstaller', checked)}
-                      disabled={isLoading}
-                    />
-                  </div>
-                )}
-
-                {/* Dynamic Step Content */}
-                {renderStepContent()}
-
-                {/* Fun Error Message */}
-                {error && (
-                  <Alert className="border-red-200 bg-red-50">
-                    <AlertTriangle className="h-4 w-4 text-red-600" />
-                    <AlertDescription className="text-red-700 font-medium">
-                      {error}
-                    </AlertDescription>
-                  </Alert>
-                )}
-
-                {/* Navigation Buttons */}
-                <div className="flex justify-between space-x-4 pt-6">
-                  {currentStep > 1 && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={handlePrevious}
-                      disabled={isLoading}
-                      className="flex items-center space-x-2"
-                    >
-                      <ChevronLeft className="w-4 h-4" />
-                      <span>Previous</span>
-                    </Button>
-                  )}
-                  
-                  <div className="flex-1"></div>
-                  
-                  {currentStep < totalSteps ? (
-                    <Button
-                      type="button"
-                      onClick={handleNext}
-                      disabled={isLoading}
-                      className="flex items-center space-x-2 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700"
-                    >
-                      <span>Next</span>
-                      <ChevronRight className="w-4 h-4" />
-                    </Button>
-                  ) : (
-                    <Button
-                      type="submit"
-                      disabled={isLoading}
-                      className="flex items-center space-x-2 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700"
-                    >
-                      {isLoading ? (
-                        <>
-                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                          <span>Creating Account...</span>
-                        </>
-                      ) : (
-                        <>
-                          <UserPlus className="w-4 h-4" />
-                          <span>Create Account</span>
-                        </>
-                      )}
-                    </Button>
-                  )}
-                </div>
-
-                {/* Login Link */}
-                <div className="text-center pt-6 border-t border-slate-200">
-                  <p className="text-slate-600">
-                    Already have an account?{' '}
-                    <button
-                      type="button"
-                      onClick={onToggleAuth}
-                      className="text-blue-600 hover:text-blue-700 font-medium hover:underline"
-                      disabled={isLoading}
-                    >
-                      Sign in here
-                    </button>
-                  </p>
-                </div>
-              </form>
-            </CardContent>
-          </Card>
-        </div>
+              <div className="text-center pt-6 border-t border-slate-200">
+                <p className="text-slate-600">
+                  Already have an account?{' '}
+                  <button
+                    type="button"
+                    onClick={onToggleAuth}
+                    className="text-blue-600 hover:text-blue-700 font-medium hover:underline"
+                    disabled={isLoading}
+                  >
+                    Sign in here
+                  </button>
+                </p>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
       </div>
     </div>
   );

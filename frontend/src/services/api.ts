@@ -37,13 +37,31 @@ class ApiClient {
 
     async login(credentials: { username: string; password: string; userType: string }): Promise<AuthResponse> {
         console.log('Raw login payload:', JSON.stringify(credentials));
-        try {
-            const response = await this.api.post('/auth/login', credentials);
-            return response;
-        } catch (error: any) {
-            console.error('Login error details:', error.response?.data);
-            throw error;
-        }
+        const response = await this.api.post('/auth/login', credentials, {
+            headers: { 'Content-Type': 'application/json' }
+        });
+        return response;
+    }
+
+    async register(userData: {
+        username: string;
+        name: string;
+        email: string;
+        password: string;
+        userType: string;
+        whatsappNumber: string;
+        address?: string;
+        panelBrand?: string;
+        panelCapacity?: number;
+        panelType?: string;
+        inverterBrand?: string;
+        inverterCapacity?: number;
+    }): Promise<AuthResponse> {
+        console.log('Raw register payload:', JSON.stringify(userData));
+        const response = await this.api.post('/auth/register', userData, {
+            headers: { 'Content-Type': 'application/json' }
+        });
+        return response;
     }
 
     async logout(): Promise<void> {

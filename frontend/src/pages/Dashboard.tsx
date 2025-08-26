@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { LoginForm } from '@/components/auth/LoginForm';
-import { RegisterForm } from '@/components/auth/RegisterForm';
+import { MultiStepRegistration } from '@/components/auth/MultiStepRegistration';
 import { PlantsOverview } from '@/components/plants/PlantsOverview';
 import { DeviceDetail } from '@/components/devices/DeviceDetail';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
@@ -41,20 +41,49 @@ const Dashboard = () => {
             toast.success(`Welcome back, ${response.user.name}!`);
         } catch (error) {
             console.error('Login failed:', error);
+            toast.error('Login failed. Please check your credentials.');
             throw error;
         }
     };
 
-    const handleRegister = async (userData: { username: string; name: string; password: string; confirmPassword: string; userType: 'customer' | 'installer' }) => {
+    const handleRegister = async (userData: {
+        username: string;
+        fullname: string;
+        password: string;
+        confirmPassword: string;
+        email: string;
+        whatsappNumber: string;
+        address?: string;
+        panelBrand?: string;
+        panelCapacity?: string;
+        panelType?: string;
+        inverterBrand?: string;
+        inverterCapacity?: string;
+        isInstaller: boolean;
+    }) => {
         try {
-            console.log('Register attempt:', userData.name, userData.username);
-            const response = await apiClient.register(userData);
+            console.log('Register attempt:', userData.fullname, userData.username);
+            const response = await apiClient.register({
+                username: userData.username.trim(),
+                name: userData.fullname.trim(),
+                email: userData.email.trim(),
+                password: userData.password.trim(),
+                userType: userData.isInstaller ? 'installer' : 'customer',
+                whatsappNumber: userData.whatsappNumber.trim(),
+                address: userData.address?.trim(),
+                panelBrand: userData.panelBrand?.trim(),
+                panelCapacity: userData.panelCapacity ? parseFloat(userData.panelCapacity) : undefined,
+                panelType: userData.panelType?.trim(),
+                inverterBrand: userData.inverterBrand?.trim(),
+                inverterCapacity: userData.inverterCapacity ? parseFloat(userData.inverterCapacity) : undefined,
+            });
             login(response.user, response.token);
             setCurrentView('plants');
-            toast.success(`Welcome, ${response.user.name}! Account created successfully.`);
-        } catch (error) {
+            toast.success(`Welcome to the Solar Family, ${response.user.name}! Account created successfully.`);
+        } catch (error: any) {
             console.error('Registration failed:', error);
-            toast.error('Registration failed. Please try again.');
+            toast.error('Registration failed. ' + (error.response?.data?.detail || 'Please try again.'));
+            throw error;
         }
     };
 
@@ -72,6 +101,7 @@ const Dashboard = () => {
             setSelectedDevice(null);
             setCurrentView('login');
             setIsLogin(true);
+            toast.info('Logged out successfully');
         }
     };
 
@@ -116,7 +146,8 @@ const Dashboard = () => {
 
     if (currentView === 'register') {
         return (
-            <RegisterForm 
+            <MultiStepRegistration 
+                onRegister={handleRegister}
                 onToggleAuth={toggleAuthMode}
             />
         );

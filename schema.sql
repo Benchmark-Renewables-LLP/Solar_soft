@@ -1,7 +1,6 @@
 -- Simplified SQL schema for solar dashboard project
--- Focus on users table for login; other tables included without triggers
+-- Supports user registration with required and optional fields
 -- Drops all tables and types to ensure clean state
--- Removes problematic jobs and triggers
 -- Run in a test database; remove DROP statements in production
 
 -- Drop existing tables and types
@@ -30,8 +29,8 @@ CREATE TABLE users (
     name TEXT NOT NULL,
     email TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
-    userType TEXT NOT NULL CHECK (userType IN ('customer', 'installer')),
-    profile JSONB NOT NULL DEFAULT '{}',
+    usertype TEXT NOT NULL CHECK (usertype IN ('customer', 'installer')),
+    profile JSONB NOT NULL DEFAULT '{}', -- Stores address, panelBrand, panelCapacity, panelType, inverterBrand, inverterCapacity, whatsappNumber
     created_at TIMESTAMPTZ DEFAULT NOW(),
     last_login TIMESTAMPTZ,
     updated_at TIMESTAMPTZ
@@ -39,20 +38,22 @@ CREATE TABLE users (
 CREATE INDEX idx_users_username ON users(username);
 CREATE INDEX idx_users_email ON users(email);
 
-INSERT INTO users (id, username, name, email, password_hash, userType, profile)
+INSERT INTO users (id, username, name, email, password_hash, usertype, profile)
 VALUES 
-    ('507f1f77bcf86cd799439011', 'demo', 'Demo User', 'demo@example.com', '$2b$12$mcZLDV4fPyhoKsGIUyk03eQxkANE0ifIFYJpITZAAb1s61BE.Z9Oe', 'customer', '{"installationId": "INST-12345", "address": "123 Solar Street, CA"}'),
-    ('507f1f77bcf86cd799439012', 'admin', 'Admin User', 'admin@example.com', '$2b$12$b4Dp/13Bh2bN/5nlpKxBrer3sN0zRxrnSPlEk7Ex8lKlNGog6eedu', 'installer', '{"companyName": "Solar Install Co", "licenseNumber": "LIC-789", "phoneNumber": "+1-555-0123"}');
+    ('507f1f77bcf86cd799439011', 'demo', 'Demo User', 'demo@example.com', '$2b$12$mcZLDV4fPyhoKsGIUyk03eQxkANE0ifIFYJpITZAAb1s61BE.Z9Oe', 'customer', '{"installationId": "INST-12345", "address": "123 Solar Street, CA", "whatsappNumber": "+1234567890"}'),
+    ('507f1f77bcf86cd799439012', 'admin', 'Admin User', 'admin@example.com', '$2b$12$b4Dp/13Bh2bN/5nlpKxBrer3sN0zRxrnSPlEk7Ex8lKlNGog6eedu', 'installer', '{"companyName": "Solar Install Co", "licenseNumber": "LIC-789", "phoneNumber": "+1-555-0123", "panelBrand": "SunPower", "panelCapacity": "5.0", "panelType": "monocrystalline", "inverterBrand": "SMA", "inverterCapacity": "4.0", "whatsappNumber": "+1987654321"}');
 
 -- Create customers table
 CREATE TABLE customers (
     customer_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL UNIQUE,
     customer_name TEXT NOT NULL,
     email TEXT,
     phone TEXT,
     address TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ
+    updated_at TIMESTAMPTZ,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
 -- Create api_credentials table
