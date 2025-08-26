@@ -3,32 +3,46 @@ from fastapi import HTTPException, status
 import jwt
 from passlib.context import CryptContext
 from backend.config.settings import settings
-from backend.models.user import UserCreate, UserLogin, UserOut, Token
-from backend.repository.user_repo import get_user_by_username, get_user_by_email, create_user
+from backend.models.user import UserCreate, UserLogin, UserOut, Token, OTPVerify
+from backend.repository.user_repo import get_user_by_username, get_user_by_email, create_user, verify_user
 from backend.utils.auth_utils import verify_password
+import redis.asyncio as redis
 import logging
 import uuid
+import random
+import string
+import json
 
 logger = logging.getLogger(__name__)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+redis_client = redis.from_url(settings.REDIS_URL)
 
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
 
+def generate_otp() -> str:
+    return ''.join(random.choices(string.digits, k=6))
+
+async def send_otp_email(email: str, otp: str):
+    logger.debug(f"Mock sending OTP {otp} to {email}")
+
 def authenticate_user(login_id: str, password: str, userType: str) -> UserOut | bool:
     logger.debug(f"Authenticating user: login_id={login_id}, userType={userType}")
-    user_dict = get_user_by_username(login_id) or get_user_by_email(login_id)
+    user_dict = get_user_by_username(login_id.strip()) or get_user_by_email(login_id.strip())
     if not user_dict:
-        logger.error(f"User not found: {login_id}")
+        logger.warning(f"User not found: login_id={login_id}")
         return False
+    if not user_dict.get('verified', False):
+        logger.warning(f"User not verified: login_id={login_id}")
+        raise HTTPException(status_code=403, detail="Account not verified. Please check your email for the OTP.")
     if 'usertype' not in user_dict:
         logger.error(f"Database schema error: 'usertype' column missing for user {login_id}")
         raise HTTPException(status_code=500, detail="Database schema error: missing usertype column")
     if user_dict['usertype'] != userType:
-        logger.error(f"Incorrect userType: expected {user_dict['usertype']}, got {userType}")
+        logger.warning(f"Incorrect userType: expected {user_dict['usertype']}, got {userType}")
         raise HTTPException(status_code=400, detail=f"Incorrect userType: must be {user_dict['usertype']}")
     if not verify_password(password, user_dict['password_hash']):
-        logger.error(f"Password verification failed for {login_id}")
+        logger.warning(f"Password verification failed for login_id={login_id}")
         return False
     logger.debug(f"User authenticated: {user_dict['username']}")
     user_dict['userType'] = user_dict.pop('usertype')
@@ -45,7 +59,7 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
     return encoded_jwt
 
 async def login_user(user_credentials: UserLogin) -> Token:
-    logger.debug(f"Login attempt: {user_credentials}")
+    logger.debug(f"Login attempt: username={user_credentials.username}, userType={user_credentials.userType}")
     user = authenticate_user(user_credentials.username, user_credentials.password, user_credentials.userType)
     if not user:
         raise HTTPException(
@@ -60,11 +74,11 @@ async def login_user(user_credentials: UserLogin) -> Token:
     logger.debug(f"Login successful for {user.username}")
     return Token(token=access_token, user=user)
 
-async def register_user(user_data: UserCreate) -> Token:
-    logger.debug(f"Registering user: {user_data}")
+async def register_user(user_data: UserCreate) -> dict:
+    logger.debug(f"Registering user: username={user_data.username}, email={user_data.email}")
     existing_user = get_user_by_username(user_data.username) or get_user_by_email(user_data.email)
     if existing_user:
-        logger.error(f"User already exists: username={user_data.username}, email={user_data.email}")
+        logger.warning(f"User already exists: username={user_data.username}, email={user_data.email}")
         raise HTTPException(status_code=400, detail="Username or email already exists")
     
     password_hash = hash_password(user_data.password)
@@ -88,20 +102,57 @@ async def register_user(user_data: UserCreate) -> Token:
         "password_hash": password_hash,
         "usertype": user_data.userType,
         "profile": profile,
-        "created_at": datetime.utcnow(),
+        "verified": False,
+        "created_at": datetime.utcnow().isoformat(),  # Convert to string
         "last_login": None,
         "updated_at": None
     }
     try:
         created_user = await create_user(user_dict)
         logger.debug(f"User created: {created_user['username']}")
-        user_out = UserOut(**created_user)
         
+        otp = generate_otp()
+        await redis_client.setex(f"otp:{user_data.email}", 600, otp)
+        await redis_client.setex(f"user:{user_data.email}", 600, json.dumps(user_dict))
+        await send_otp_email(user_data.email, otp)
+        
+        return {"email": user_data.email, "message": "OTP sent to email"}
+    except Exception as e:
+        logger.error(f"Failed to create user: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to create user: {str(e)}")
+
+async def verify_otp(otp_data: OTPVerify) -> Token:
+    logger.debug(f"Verifying OTP for email: {otp_data.email}")
+    stored_otp = await redis_client.get(f"otp:{otp_data.email}")
+    if not stored_otp:
+        logger.warning(f"OTP not found or expired for email: {otp_data.email}")
+        raise HTTPException(status_code=400, detail="OTP not found or expired")
+    if stored_otp.decode() != otp_data.otp:
+        logger.warning(f"Invalid OTP for email: {otp_data.email}")
+        raise HTTPException(status_code=400, detail="Invalid OTP")
+    
+    user_dict_str = await redis_client.get(f"user:{otp_data.email}")
+    if not user_dict_str:
+        logger.error(f"User data not found for email: {otp_data.email}")
+        raise HTTPException(status_code=400, detail="User data not found")
+    
+    user_dict = json.loads(user_dict_str.decode())
+    try:
+        verified_user = await verify_user(otp_data.email)
+        if not verified_user:
+            logger.error(f"Failed to verify user: {otp_data.email}")
+            raise HTTPException(status_code=500, detail="Failed to verify user")
+        
+        user_out = UserOut(**verified_user)
         access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
         access_token = create_access_token(
             data={"sub": user_out.username, "userType": user_out.userType}, expires_delta=access_token_expires
         )
+        
+        await redis_client.delete(f"otp:{otp_data.email}")
+        await redis_client.delete(f"user:{otp_data.email}")
+        
         return Token(token=access_token, user=user_out)
     except Exception as e:
-        logger.error(f"Failed to create user: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to create user: {str(e)}")
+        logger.error(f"Failed to verify OTP: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to verify OTP: {str(e)}")

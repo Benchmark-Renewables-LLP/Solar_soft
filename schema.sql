@@ -1,5 +1,5 @@
 -- Simplified SQL schema for solar dashboard project
--- Supports user registration with required and optional fields
+-- Supports user registration with OTP verification
 -- Drops all tables and types to ensure clean state
 -- Run in a test database; remove DROP statements in production
 
@@ -22,7 +22,7 @@ DROP FUNCTION IF EXISTS update_updated_at_column CASCADE;
 CREATE TYPE api_provider_type AS ENUM ('shinemonitor', 'solarman', 'soliscloud');
 CREATE TYPE severity_type AS ENUM ('low', 'medium', 'high');
 
--- Create users table
+-- Create users table with verified column
 CREATE TABLE users (
     id TEXT PRIMARY KEY,
     username TEXT UNIQUE NOT NULL,
@@ -30,7 +30,8 @@ CREATE TABLE users (
     email TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
     usertype TEXT NOT NULL CHECK (usertype IN ('customer', 'installer')),
-    profile JSONB NOT NULL DEFAULT '{}', -- Stores address, panelBrand, panelCapacity, panelType, inverterBrand, inverterCapacity, whatsappNumber
+    profile JSONB NOT NULL DEFAULT '{}',
+    verified BOOLEAN NOT NULL DEFAULT FALSE, -- Added for OTP verification
     created_at TIMESTAMPTZ DEFAULT NOW(),
     last_login TIMESTAMPTZ,
     updated_at TIMESTAMPTZ
@@ -38,10 +39,10 @@ CREATE TABLE users (
 CREATE INDEX idx_users_username ON users(username);
 CREATE INDEX idx_users_email ON users(email);
 
-INSERT INTO users (id, username, name, email, password_hash, usertype, profile)
+INSERT INTO users (id, username, name, email, password_hash, usertype, profile, verified)
 VALUES 
-    ('507f1f77bcf86cd799439011', 'demo', 'Demo User', 'demo@example.com', '$2b$12$mcZLDV4fPyhoKsGIUyk03eQxkANE0ifIFYJpITZAAb1s61BE.Z9Oe', 'customer', '{"installationId": "INST-12345", "address": "123 Solar Street, CA", "whatsappNumber": "+1234567890"}'),
-    ('507f1f77bcf86cd799439012', 'admin', 'Admin User', 'admin@example.com', '$2b$12$b4Dp/13Bh2bN/5nlpKxBrer3sN0zRxrnSPlEk7Ex8lKlNGog6eedu', 'installer', '{"companyName": "Solar Install Co", "licenseNumber": "LIC-789", "phoneNumber": "+1-555-0123", "panelBrand": "SunPower", "panelCapacity": "5.0", "panelType": "monocrystalline", "inverterBrand": "SMA", "inverterCapacity": "4.0", "whatsappNumber": "+1987654321"}');
+    ('507f1f77bcf86cd799439011', 'demo', 'Demo User', 'demo@example.com', '$2b$12$mcZLDV4fPyhoKsGIUyk03eQxkANE0ifIFYJpITZAAb1s61BE.Z9Oe', 'customer', '{"installationId": "INST-12345", "address": "123 Solar Street, CA", "whatsappNumber": "+1234567890"}', TRUE),
+    ('507f1f77bcf86cd799439012', 'admin', 'Admin User', 'admin@example.com', '$2b$12$b4Dp/13Bh2bN/5nlpKxBrer3sN0zRxrnSPlEk7Ex8lKlNGog6eedu', 'installer', '{"companyName": "Solar Install Co", "licenseNumber": "LIC-789", "phoneNumber": "+1-555-0123", "panelBrand": "SunPower", "panelCapacity": 5.0, "panelType": "monocrystalline", "inverterBrand": "SMA", "inverterCapacity": 4.0, "whatsappNumber": "+1987654321"}', TRUE);
 
 -- Create customers table
 CREATE TABLE customers (

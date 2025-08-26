@@ -9,6 +9,7 @@ interface User {
     email: string;
     userType: 'customer' | 'installer';
     profile: Record<string, any>;
+    verified: boolean;
 }
 
 interface AuthResponse {
@@ -56,9 +57,17 @@ class ApiClient {
         panelType?: string;
         inverterBrand?: string;
         inverterCapacity?: number;
-    }): Promise<AuthResponse> {
+    }): Promise<{ email: string; message: string }> {
         console.log('Raw register payload:', JSON.stringify(userData));
         const response = await this.api.post('/auth/register', userData, {
+            headers: { 'Content-Type': 'application/json' }
+        });
+        return response;
+    }
+
+    async verifyOTP(otpData: { email: string; otp: string }): Promise<AuthResponse> {
+        console.log('Raw OTP verification payload:', JSON.stringify(otpData));
+        const response = await this.api.post('/auth/verify-otp', otpData, {
             headers: { 'Content-Type': 'application/json' }
         });
         return response;
@@ -67,7 +76,6 @@ class ApiClient {
     async logout(): Promise<void> {
         await this.api.post('/auth/logout');
     }
-
     async getPlants(userType = 'customer') {
         try {
             const response = await this.api.get('/plants');

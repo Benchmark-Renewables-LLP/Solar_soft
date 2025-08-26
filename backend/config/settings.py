@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     FRONTEND_URL: str = "http://localhost:3000"
-
+    REDIS_URL: str = "redis://redis:6379/0"
     # ETL fields (optional to avoid errors if unset)
     DATABASE_URL: str | None = "postgresql://postgres:password@timescaledb:5432/solar_db"
     COMPANY_KEY: str | None = None
