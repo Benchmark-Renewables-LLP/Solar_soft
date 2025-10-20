@@ -103,12 +103,12 @@ async def register_user(user_data: UserCreate) -> dict:
         "usertype": user_data.userType,
         "profile": profile,
         "verified": False,
-        "created_at": datetime.utcnow().isoformat(),  # Convert to string
+        "created_at": datetime.utcnow().isoformat(),
         "last_login": None,
         "updated_at": None
     }
     try:
-        created_user = await create_user(user_dict)
+        created_user = create_user(user_data)
         logger.debug(f"User created: {created_user['username']}")
         
         otp = generate_otp()
@@ -138,7 +138,7 @@ async def verify_otp(otp_data: OTPVerify) -> Token:
     
     user_dict = json.loads(user_dict_str.decode())
     try:
-        verified_user = await verify_user(otp_data.email)
+        verified_user = verify_user(otp_data.email)
         if not verified_user:
             logger.error(f"Failed to verify user: {otp_data.email}")
             raise HTTPException(status_code=500, detail="Failed to verify user")

@@ -1,75 +1,48 @@
 from pydantic import BaseModel, EmailStr, Field
-from typing import Literal, Dict, Any
+from typing import Optional, List
 from datetime import datetime
 
-class UserBase(BaseModel):
-    username: str = Field(..., min_length=3, max_length=50, pattern=r"^[a-zA-Z0-9_-]+$")
-    name: str = Field(..., min_length=1, max_length=100)
-    email: EmailStr
-    userType: Literal["customer", "installer"]
-
 class UserCreate(BaseModel):
-    username: str = Field(..., min_length=3, max_length=50, pattern=r"^[a-zA-Z0-9_-]+$")
-    name: str = Field(..., min_length=1, max_length=100)
-    email: EmailStr
-    password: str = Field(..., min_length=8)
-    userType: Literal["customer", "installer"]
-    whatsappNumber: str = Field(..., pattern=r"^\+?[1-9]\d{9,14}$")
-    address: str | None = None
-    panelBrand: str | None = None
-    panelCapacity: float | None = None
-    panelType: str | None = None
-    inverterBrand: str | None = None
-    inverterCapacity: float | None = None
-    profile: Dict[str, Any] = {}
-
-    model_config = {"extra": "forbid"}
-
-    @classmethod
-    def __get_validators__(cls):
-        yield cls.validate_installer_fields
-        yield cls.validate_password
-
-    @classmethod
-    def validate_installer_fields(cls, values):
-        if values.get("userType") == "installer":
-            required_fields = ["address", "panelBrand", "panelCapacity", "panelType", "inverterBrand", "inverterCapacity"]
-            for field in required_fields:
-                if values.get(field) is None:
-                    raise ValueError(f"{field} is required for installers")
-        return values
-
-    @classmethod
-    def validate_password(cls, values):
-        password = values.get("password")
-        if password:
-            if not (any(c.islower() for c in password) and
-                    any(c.isupper() for c in password) and
-                    any(c.isdigit() for c in password) and
-                    any(c in "@$!%*?&" for c in password)):
-                raise ValueError("Password must contain at least one lowercase letter, one uppercase letter, one digit, and one special character (@$!%*?&)")
-        return values
+    username: str = Field(..., min_length=3, description="Username")
+    name: str = Field(..., description="Full name")
+    email: EmailStr = Field(..., description="Email")
+    password: str = Field(..., min_length=6, description="Password")
+    userType: str = Field(..., description="User type: 'customer' or 'installer'")
+    whatsappNumber: str = Field(..., description="WhatsApp number")
+    address: Optional[str] = Field(None, description="Address")
+    panelBrand: Optional[str] = Field(None, description="Panel brand")
+    panelCapacity: Optional[float] = Field(None, description="Panel capacity in kW")
+    panelType: Optional[str] = Field(None, description="Panel type")
+    inverterBrand: Optional[str] = Field(None, description="Inverter brand")
+    inverterCapacity: Optional[float] = Field(None, description="Inverter capacity in kW")
 
 class UserLogin(BaseModel):
-    username: str = Field(..., min_length=3, max_length=50, pattern=r"^[a-zA-Z0-9_-]+$")
-    password: str = Field(..., min_length=6)  # Relaxed to 6 characters
-    userType: Literal["customer", "installer"]
+    username: str = Field(..., description="Username or email")
+    password: str = Field(..., description="Password")
+    userType: str = Field(..., description="User type: 'customer' or 'installer'")
 
 class OTPVerify(BaseModel):
-    email: EmailStr
-    otp: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
+    email: EmailStr = Field(..., description="Email")
+    otp: str = Field(..., description="6-digit OTP")
+
+class Token(BaseModel):
+    token: str = Field(..., description="Access token")
+    user: Optional[dict] = Field(None, description="User details")
 
 class UserOut(BaseModel):
     id: str
-    username: str = Field(..., min_length=3, max_length=50, pattern=r"^[a-zA-Z0-9_-]+$")
-    name: str = Field(..., min_length=1, max_length=100)
-    email: EmailStr
-    userType: Literal["customer", "installer"]
-    profile: Dict[str, Any]
+    username: str
+    name: str
+    email: str
+    userType: str
     verified: bool
-    created_at: datetime | None
-    last_login: datetime | None
+    profile: dict
+    created_at: datetime
 
-class Token(BaseModel):
-    token: str
-    user: UserOut
+    class Config:
+        from_attributes = True
+
+class UserUpdate(BaseModel):
+    name: Optional[str] = Field(None, description="Full name")
+    email: Optional[EmailStr] = Field(None, description="Email")
+    profile: Optional[dict] = Field(None, description="Profile updates")

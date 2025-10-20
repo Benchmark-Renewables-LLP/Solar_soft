@@ -1,5 +1,5 @@
--- Simplified SQL schema for solar dashboard project
--- Supports user registration with OTP verification
+-- Simplified SQL schema for RayVolt dashboard
+-- Supports user registration, OTP verification, and ETL automation
 -- Drops all tables and types to ensure clean state
 -- Run in a test database; remove DROP statements in production
 
@@ -14,6 +14,7 @@ DROP TABLE IF EXISTS devices CASCADE;
 DROP TABLE IF EXISTS plants CASCADE;
 DROP TABLE IF EXISTS api_credentials CASCADE;
 DROP TABLE IF EXISTS customers CASCADE;
+DROP TABLE IF EXISTS users CASCADE;
 DROP TYPE IF EXISTS api_provider_type CASCADE;
 DROP TYPE IF EXISTS severity_type CASCADE;
 DROP FUNCTION IF EXISTS update_updated_at_column CASCADE;
@@ -31,7 +32,7 @@ CREATE TABLE users (
     password_hash TEXT NOT NULL,
     usertype TEXT NOT NULL CHECK (usertype IN ('customer', 'installer')),
     profile JSONB NOT NULL DEFAULT '{}',
-    verified BOOLEAN NOT NULL DEFAULT FALSE, -- Added for OTP verification
+    verified BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     last_login TIMESTAMPTZ,
     updated_at TIMESTAMPTZ
@@ -39,6 +40,7 @@ CREATE TABLE users (
 CREATE INDEX idx_users_username ON users(username);
 CREATE INDEX idx_users_email ON users(email);
 
+-- Insert demo users
 INSERT INTO users (id, username, name, email, password_hash, usertype, profile, verified)
 VALUES 
     ('507f1f77bcf86cd799439011', 'demo', 'Demo User', 'demo@example.com', '$2b$12$mcZLDV4fPyhoKsGIUyk03eQxkANE0ifIFYJpITZAAb1s61BE.Z9Oe', 'customer', '{"installationId": "INST-12345", "address": "123 Solar Street, CA", "whatsappNumber": "+1234567890"}', TRUE),
@@ -56,21 +58,26 @@ CREATE TABLE customers (
     updated_at TIMESTAMPTZ,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+CREATE INDEX idx_customers_user_id ON customers(user_id);
 
 -- Create api_credentials table
 CREATE TABLE api_credentials (
     credential_id SERIAL PRIMARY KEY,
-    user_id TEXT NOT NULL UNIQUE,
+    user_id TEXT NOT NULL,
     customer_id TEXT NOT NULL,
     api_provider api_provider_type NOT NULL,
     username TEXT NOT NULL,
     password TEXT NOT NULL,
     api_key TEXT,
     api_secret TEXT,
+    last_fetched TIMESTAMPTZ, -- Added for ETL tracking
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (customer_id) REFERENCES customers(customer_id) ON DELETE CASCADE
 );
+CREATE INDEX idx_api_credentials_customer_id ON api_credentials(customer_id);
+CREATE INDEX idx_api_credentials_api_provider ON api_credentials(api_provider);
 
 -- Create plants table
 CREATE TABLE plants (
@@ -85,6 +92,7 @@ CREATE TABLE plants (
     updated_at TIMESTAMPTZ,
     FOREIGN KEY (customer_id) REFERENCES customers(customer_id) ON DELETE CASCADE
 );
+CREATE INDEX idx_plants_customer_id ON plants(customer_id);
 
 -- Create devices table
 CREATE TABLE devices (
@@ -99,6 +107,7 @@ CREATE TABLE devices (
     updated_at TIMESTAMPTZ,
     FOREIGN KEY (plant_id) REFERENCES plants(plant_id) ON DELETE CASCADE
 );
+CREATE INDEX idx_devices_plant_id ON devices(plant_id);
 
 -- Create weather_data table
 CREATE TABLE weather_data (

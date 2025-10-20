@@ -1,15 +1,17 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 class Settings(BaseSettings):
-    # Auth fields (required)
-    JWT_SECRET_KEY: str
+    JWT_SECRET_KEY: str = "your-secret-key"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     FRONTEND_URL: str = "http://localhost:3000"
+    DATABASE_URL: str = "postgresql://postgres:password@timescaledb:5432/solar_db"
     REDIS_URL: str = "redis://redis:6379/0"
-    # ETL fields (optional to avoid errors if unset)
-    DATABASE_URL: str | None = "postgresql://postgres:password@timescaledb:5432/solar_db"
+    SENDGRID_API_KEY: str | None = None
     COMPANY_KEY: str | None = None
     FLASK_ENV: str | None = "development"
     ENCRYPTION_KEY: str | None = None
@@ -22,13 +24,19 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file='.env',
         env_file_encoding='utf-8',
-        extra='ignore',  # Ignore any unmatched vars
+        extra='ignore',
         case_sensitive=False
     )
 
-    def __post_init__(self):
-        # Debug: Print loaded env vars
-        print("Loaded environment variables:", {k: v for k, v in os.environ.items() if k in self.model_fields})
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        logger.debug("Loaded environment variables: %s", {k: v for k, v in os.environ.items() if k in self.model_fields})
+        logger.debug("DATABASE_URL: %s", self.DATABASE_URL)
+        logger.debug("REDIS_URL: %s", self.REDIS_URL)
+        logger.debug("SENDGRID_API_KEY: %s", self.SENDGRID_API_KEY)
+        if "localhost" in self.DATABASE_URL:
+            logger.warning("DATABASE_URL contains 'localhost'; overriding to 'timescaledb'")
+            self.DATABASE_URL = "postgresql://postgres:password@timescaledb:5432/solar_db"
 
 settings = Settings()
-print("Settings loaded:", settings.dict())
+logger.debug("Settings loaded: %s", settings.dict())
